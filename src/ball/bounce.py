@@ -15,6 +15,7 @@ def detect_bounces(
     min_frames_between: int = 10,
     dy_threshold_px: float = 3.0,
     score_threshold: float = 0.5,
+    exclude_frames: set[int] | None = None,
 ) -> pd.DataFrame:
     """
     Detecta botes usando SOLO señal en píxeles (cx, cy) del df interpolado.
@@ -61,7 +62,16 @@ def detect_bounces(
     dy_curr = dy[1:]
     sign_flip = (dy_prev > float(dy_threshold_px)) & (dy_curr < -float(dy_threshold_px))
 
-    if not np.any(sign_flip):
+    cy_values = cy_smooth.to_numpy(dtype=np.float64)
+    peaks = np.zeros(len(cy_values), dtype=bool)
+    if len(cy_values) >= 3:
+        peaks[1:-1] = (cy_values[1:-1] > cy_values[:-2]) & (cy_values[1:-1] > cy_values[2:])
+
+    candidate_mask = np.zeros(len(series), dtype=bool)
+    candidate_mask[1:] = sign_flip
+    candidate_mask &= peaks
+
+    if not np.any(candidate_mask):
         return pd.DataFrame(columns=out_cols)
 
     abs_ddy = np.abs(ddy)
@@ -82,7 +92,7 @@ def detect_bounces(
     s2 = _clamp01(delta_dy / p95_delta_dy)
     score = 0.7 * s1 + 0.3 * s2
 
-    candidate_idx = np.where(sign_flip)[0] + 1  # índice temporal t para dy[t]
+    candidate_idx = np.where(candidate_mask)[0]
     candidate_scores = score[candidate_idx - 1]
 
     candidate_df = pd.DataFrame(
@@ -96,6 +106,8 @@ def detect_bounces(
     )
 
     candidate_df = candidate_df[candidate_df["bounce_score"] >= float(score_threshold)].copy()
+    if exclude_frames:
+        candidate_df = candidate_df[~candidate_df["frame_bounce"].astype(int).isin(exclude_frames)].copy()
     if candidate_df.empty:
         return pd.DataFrame(columns=out_cols)
 
