@@ -15,13 +15,50 @@ from court.homography import (
     load_manual_calibration,
     project_points_to_meters,
 )
-from player.pose import detect_players
+from player.pose import detect_players, ensure_pose_model
 from viz.render import render_video, save_direction_plots
 
 
 def _ensure_file(path: Path, label: str) -> None:
     if not path.exists():
         raise FileNotFoundError(f"{label} not found: {path}")
+
+
+def _resolve_path(path_str: str, project_root: Path, script_dir: Path) -> Path:
+    path = Path(path_str).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+
+    project_candidate = (project_root / path).resolve()
+    if project_candidate.exists():
+        return project_candidate
+
+    script_candidate = (script_dir / path).resolve()
+    if script_candidate.exists():
+        return script_candidate
+
+    return project_candidate
+
+
+def _filter_bounces_with_next_hit(df_bounces, df_hits, max_gap: int):
+    if df_bounces.empty or df_hits is None or df_hits.empty:
+        return df_bounces
+
+    hit_frames = sorted(df_hits["frame_hit"].astype(int).tolist())
+    if not hit_frames:
+        return df_bounces
+
+    keep_mask = []
+    for frame_bounce in df_bounces["frame_bounce"].astype(int).tolist():
+        next_hits = [hit for hit in hit_frames if hit > frame_bounce]
+        if not next_hits:
+            keep_mask.append(True)
+            continue
+
+        gap = next_hits[0] - frame_bounce
+        keep_mask.append(1 <= gap <= int(max_gap))
+
+    return df_bounces.loc[keep_mask].reset_index(drop=True)
 
 
 def parse_args() -> argparse.Namespace:
@@ -70,9 +107,21 @@ def parse_args() -> argparse.Namespace:
         help="Path to best bounce JSON output",
     )
     parser.add_argument("--detect-players", action="store_true", help="Enable player pose detection")
+    parser.add_argument("--pose-model", type=str, default="models/yolov8n-pose.pt", help="Path to YOLO pose model")
+    parser.add_argument(
+        "--pose-download",
+        action="store_true",
+        help="Allow automatic pose-model download when --pose-model is missing",
+    )
     parser.add_argument("--detect-hits", action="store_true", help="Enable hit detection")
     parser.add_argument("--hit-out", type=str, default="hits.csv", help="Path to hits CSV output")
     parser.add_argument("--hit-visuals", action="store_true", help="Render hit markers on output video")
+    parser.add_argument(
+        "--bounce-max-gap-to-next-hit",
+        type=int,
+        default=15,
+        help="Maximum allowed frame gap between bounce and its next hit",
+    )
     return parser.parse_args()
 
 
@@ -81,9 +130,11 @@ def main() -> None:
 
     # Make paths robust regardless of where you run from
     script_dir = Path(__file__).resolve().parent
-    model_path = (script_dir / args.model).resolve() if not Path(args.model).is_absolute() else Path(args.model).resolve()
-    video_path = (script_dir / args.video).resolve() if not Path(args.video).is_absolute() else Path(args.video).resolve()
-    outdir = (script_dir / args.outdir).resolve() if not Path(args.outdir).is_absolute() else Path(args.outdir).resolve()
+    project_root = script_dir.parent
+    model_path = _resolve_path(args.model, project_root, script_dir)
+    video_path = _resolve_path(args.video, project_root, script_dir)
+    outdir = _resolve_path(args.outdir, project_root, script_dir)
+    pose_model_path = _resolve_path(args.pose_model, project_root, script_dir)
 
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -124,10 +175,19 @@ def main() -> None:
     df_bounces = None
     df_players = None
     df_hits = None
-    bounce_exclude_frames: set[int] | None = None
 
     if args.detect_players or args.detect_hits:
-        df_players = detect_players(frames_raw)
+        if pose_model_path.exists():
+            pose_weights = pose_model_path
+        elif args.pose_download:
+            pose_weights = ensure_pose_model(pose_model_path)
+        else:
+            raise FileNotFoundError(
+                f"Pose model not found at {pose_model_path}. "
+                "Download it to models/ or rerun with --pose-download"
+            )
+
+        df_players = detect_players(frames_raw, weights_path=pose_weights)
         output_players.parent.mkdir(parents=True, exist_ok=True)
         df_players.to_csv(output_players, index=False)
         print(f"🧍 CSV jugadores: {output_players}")
@@ -143,10 +203,6 @@ def main() -> None:
         df_hits.to_csv(output_hits, index=False)
         print(f"🏓 CSV golpes: {output_hits}")
 
-        if args.detect_bounces and not df_hits.empty:
-            hit_frames = df_hits["frame_hit"].astype(int).tolist()
-            bounce_exclude_frames = {f + delta for f in hit_frames for delta in range(-4, 5)}
-
     if args.detect_bounces:
         df_bounces = detect_bounces(
             df_interpolado,
@@ -155,8 +211,13 @@ def main() -> None:
             min_frames_between=args.bounce_min_frames_between,
             dy_threshold_px=args.bounce_dy_threshold_px,
             score_threshold=args.bounce_score_threshold,
-            exclude_frames=bounce_exclude_frames,
         )
+        if args.detect_hits and df_hits is not None and not df_hits.empty:
+            df_bounces = _filter_bounces_with_next_hit(
+                df_bounces,
+                df_hits,
+                max_gap=args.bounce_max_gap_to_next_hit,
+            )
 
     render_kwargs = {}
     if args.detect_bounces and args.bounce_visuals:
@@ -236,8 +297,13 @@ def main() -> None:
                 min_frames_between=args.bounce_min_frames_between,
                 dy_threshold_px=args.bounce_dy_threshold_px,
                 score_threshold=args.bounce_score_threshold,
-                exclude_frames=bounce_exclude_frames,
             )
+            if args.detect_hits and df_hits is not None and not df_hits.empty:
+                df_bounces = _filter_bounces_with_next_hit(
+                    df_bounces,
+                    df_hits,
+                    max_gap=args.bounce_max_gap_to_next_hit,
+                )
 
         if not df_bounces.empty and H is not None:
             projected = project_points_to_meters(df_bounces[["cx", "cy"]].to_numpy(dtype="float32"), H)
