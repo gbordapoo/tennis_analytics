@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -8,6 +9,29 @@ from ultralytics import YOLO
 
 LEFT_WRIST_INDEX = 9
 RIGHT_WRIST_INDEX = 10
+
+
+def ensure_pose_model(weights_path: Path) -> Path:
+    """Ensure pose weights exist at a fixed local path."""
+    target = Path(weights_path).expanduser().resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    if target.exists():
+        return target
+
+    try:
+        model = YOLO("yolov8n-pose.pt")
+        source = Path(model.ckpt_path)
+        if not source.exists():
+            raise FileNotFoundError(f"Ultralytics checkpoint not found at {source}")
+        target.write_bytes(source.read_bytes())
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to download pose model automatically. "
+            f"Download 'yolov8n-pose.pt' manually and place it at {target}."
+        ) from exc
+
+    return target
 
 
 def _extract_wrist(keypoints_xy: Any, keypoints_conf: Any, index: int) -> tuple[float, float]:
@@ -37,7 +61,7 @@ def _extract_wrist(keypoints_xy: Any, keypoints_conf: Any, index: int) -> tuple[
 
 def detect_players(
     frames_raw: list,
-    model_name: str = "yolov8n-pose.pt",
+    weights_path: str | Path = "yolov8n-pose.pt",
 ) -> pd.DataFrame:
     """Detect up to two players per frame and assign near/far labels."""
     columns = [
@@ -56,7 +80,7 @@ def detect_players(
     if not frames_raw:
         return pd.DataFrame(columns=columns)
 
-    model = YOLO(model_name)
+    model = YOLO(str(weights_path))
     rows: list[dict[str, Any]] = []
 
     for frame_idx, frame in enumerate(frames_raw, start=1):
