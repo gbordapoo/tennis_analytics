@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ball.bounce import detect_bounces
 from ball.detect import load_model, run_detection
+from ball.hit import detect_hits
 from ball.track import interpolar_detecciones
 from court.auto_calibrate import draw_court_overlay, run_static_auto_calibration
 from court.homography import (
@@ -14,6 +15,7 @@ from court.homography import (
     load_manual_calibration,
     project_points_to_meters,
 )
+from player.pose import detect_players
 from viz.render import render_video, save_direction_plots
 
 
@@ -67,6 +69,10 @@ def parse_args() -> argparse.Namespace:
         default="bounce_best.json",
         help="Path to best bounce JSON output",
     )
+    parser.add_argument("--detect-players", action="store_true", help="Enable player pose detection")
+    parser.add_argument("--detect-hits", action="store_true", help="Enable hit detection")
+    parser.add_argument("--hit-out", type=str, default="hits.csv", help="Path to hits CSV output")
+    parser.add_argument("--hit-visuals", action="store_true", help="Render hit markers on output video")
     return parser.parse_args()
 
 
@@ -96,6 +102,9 @@ def main() -> None:
     output_bounces = bounce_out_path if bounce_out_path.is_absolute() else (outdir / bounce_out_path)
     bounce_best_out_path = Path(args.bounce_best_out)
     output_bounce_best = bounce_best_out_path if bounce_best_out_path.is_absolute() else (outdir / bounce_best_out_path)
+    hit_out_path = Path(args.hit_out)
+    output_hits = hit_out_path if hit_out_path.is_absolute() else (outdir / hit_out_path)
+    output_players = outdir / "players.csv"
 
     model = load_model(model_path)
     frames_raw, df_detecciones, video_info = run_detection(model, video_path)
@@ -113,6 +122,31 @@ def main() -> None:
     df_interpolado.to_csv(output_csv_interpolado, index=False)
 
     df_bounces = None
+    df_players = None
+    df_hits = None
+    bounce_exclude_frames: set[int] | None = None
+
+    if args.detect_players or args.detect_hits:
+        df_players = detect_players(frames_raw)
+        output_players.parent.mkdir(parents=True, exist_ok=True)
+        df_players.to_csv(output_players, index=False)
+        print(f"🧍 CSV jugadores: {output_players}")
+
+    if args.detect_hits:
+        if df_players is None:
+            df_players = detect_players(frames_raw)
+            output_players.parent.mkdir(parents=True, exist_ok=True)
+            df_players.to_csv(output_players, index=False)
+            print(f"🧍 CSV jugadores: {output_players}")
+        df_hits = detect_hits(df_interpolado, df_players)
+        output_hits.parent.mkdir(parents=True, exist_ok=True)
+        df_hits.to_csv(output_hits, index=False)
+        print(f"🏓 CSV golpes: {output_hits}")
+
+        if args.detect_bounces and not df_hits.empty:
+            hit_frames = df_hits["frame_hit"].astype(int).tolist()
+            bounce_exclude_frames = {f + delta for f in hit_frames for delta in range(-4, 5)}
+
     if args.detect_bounces:
         df_bounces = detect_bounces(
             df_interpolado,
@@ -121,12 +155,15 @@ def main() -> None:
             min_frames_between=args.bounce_min_frames_between,
             dy_threshold_px=args.bounce_dy_threshold_px,
             score_threshold=args.bounce_score_threshold,
+            exclude_frames=bounce_exclude_frames,
         )
 
     render_kwargs = {}
     if args.detect_bounces and args.bounce_visuals:
-        render_kwargs["df_bounces"] = df_bounces
+        render_kwargs["bounces_df"] = df_bounces
         render_kwargs["bounce_topk"] = args.bounce_topk
+    if args.detect_hits and args.hit_visuals:
+        render_kwargs["hits_df"] = df_hits
 
     render_video(
         frames_raw=frames_raw,
@@ -199,6 +236,7 @@ def main() -> None:
                 min_frames_between=args.bounce_min_frames_between,
                 dy_threshold_px=args.bounce_dy_threshold_px,
                 score_threshold=args.bounce_score_threshold,
+                exclude_frames=bounce_exclude_frames,
             )
 
         if not df_bounces.empty and H is not None:

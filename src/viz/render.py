@@ -18,22 +18,30 @@ def render_video(
     frame_height: int,
     total_frames: int,
     no_gui: bool,
-    df_bounces: pd.DataFrame | None = None,
+    bounces_df: pd.DataFrame | None = None,
+    hits_df: pd.DataFrame | None = None,
     bounce_topk: int = 3,
 ) -> None:
     out = cv2.VideoWriter(str(output_video), cv2.VideoWriter_fourcc(*"mp4v"), float(fps), (frame_width, frame_height))
     print("\n🎬 Renderizando video con interpolación y extrapolación...\n")
 
     bounce_by_frame: dict[int, tuple[float, float, float]] = {}
-    if df_bounces is not None and not df_bounces.empty:
+    if bounces_df is not None and not bounces_df.empty:
         k = max(1, int(bounce_topk))
-        df_bounce_top = df_bounces.sort_values("bounce_score", ascending=False).head(k)
+        df_bounce_top = bounces_df.sort_values("bounce_score", ascending=False).head(k)
         for _, bounce in df_bounce_top.iterrows():
             frame_bounce = int(bounce["frame_bounce"])
             cx = float(bounce["cx"])
             cy = float(bounce["cy"])
             score = float(bounce["bounce_score"])
             bounce_by_frame[frame_bounce] = (cx, cy, score)
+
+
+    hit_by_frame: dict[int, tuple[float, float, float]] = {}
+    if hits_df is not None and not hits_df.empty:
+        for _, hit in hits_df.iterrows():
+            frame_hit = int(hit["frame_hit"])
+            hit_by_frame[frame_hit] = (float(hit["cx"]), float(hit["cy"]), float(hit["hit_score"]))
 
     for i, frame in enumerate(frames_raw):
         frame_id = i + 1
@@ -67,6 +75,24 @@ def render_video(
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 log_line += f" ✔️ Detected ({conf:.2f})"
+
+
+        if frame_id in hit_by_frame:
+            hx, hy, hscore = hit_by_frame[frame_id]
+            if np.isfinite(hx) and np.isfinite(hy):
+                ix, iy = int(round(hx)), int(round(hy))
+                if 0 <= ix < frame_width and 0 <= iy < frame_height:
+                    cv2.circle(frame, (ix, iy), 18, (255, 0, 0), 3)
+                    cv2.putText(
+                        frame,
+                        f"HIT {hscore:.2f}",
+                        (ix + 10, max(30, iy - 20)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (255, 0, 0),
+                        2,
+                    )
+                    log_line += f" 🔵 Hit ({hscore:.2f})"
 
         if frame_id in bounce_by_frame:
             bx, by, bscore = bounce_by_frame[frame_id]
