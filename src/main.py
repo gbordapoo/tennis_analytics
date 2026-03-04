@@ -103,6 +103,7 @@ def parse_args() -> argparse.Namespace:
         help="Calibration mode for homography (Phase 1: auto behaves like static)",
     )
     parser.add_argument("--calibration", type=str, default=None, help="Path to manual calibration JSON file")
+    parser.add_argument("--calibration-visuals", action="store_true", help="Render calibration points/polygon on output video")
     parser.add_argument("--detect-bounces", action="store_true", help="Enable bounce detection (pixel domain)")
     parser.add_argument("--bounce-visuals", action="store_true", help="Render bounce markers on output video")
     parser.add_argument("--bounce-topk", type=int, default=3, help="Number of top bounce candidates to visualize")
@@ -283,42 +284,11 @@ def main() -> None:
                 max_gap=args.bounce_max_gap_to_next_hit,
             )
 
-    render_kwargs = {}
-    if args.detect_bounces and args.bounce_visuals:
-        render_kwargs["bounces_df"] = df_bounces
-        render_kwargs["bounce_topk"] = args.bounce_topk
-    if args.detect_hits and args.hit_visuals:
-        render_kwargs["hits_df"] = df_hits
-    if args.draw_players and df_players is not None and not df_players.empty:
-        render_kwargs["df_players"] = df_players
-    render_kwargs["draw_players"] = bool(args.draw_players)
-
-    render_video(
-        frames_raw=frames_raw,
-        df_detecciones=df_detecciones,
-        df_interpolado=df_interpolado,
-        output_video=output_video,
-        fps=video_info.fps,
-        frame_width=video_info.frame_width,
-        frame_height=video_info.frame_height,
-        total_frames=video_info.total_frames,
-        no_gui=args.no_gui,
-        **render_kwargs,
-    )
-
-    print(f"\n✅ Video guardado: {output_video}")
-    print(f"📄 CSV detecciones: {output_csv}")
-    print(f"📈 CSV interpolado: {output_csv_interpolado}")
-
-    save_direction_plots(df_interpolado, output_angle_png, output_rose_png)
-    print(f"📊 Gráficos generados: {output_rose_png.name}, {output_angle_png.name}")
-
     H = None
+    overlay_frame = None
+    overlay_points = None
     if args.auto_calibrate:
         try:
-            overlay_frame = None
-            overlay_points = None
-
             if args.calibration_mode == "manual":
                 if args.calibration is None:
                     raise ValueError("--calibration is required when --calibration-mode manual")
@@ -340,17 +310,49 @@ def main() -> None:
                     H = H_auto
                     overlay_frame = best_frame
                     overlay_points = pixel_points
-
-            if H is not None:
-                df_metros = apply_homography(df_interpolado, H, float(video_info.fps))
-                df_metros.to_csv(output_csv_metros, index=False)
-                print(f"📏 CSV en metros: {output_csv_metros}")
-
-                if overlay_frame is not None and overlay_points is not None:
-                    draw_court_overlay(overlay_frame, overlay_points, output_court_overlay)
-                    print(f"🧭 Overlay de cancha: {output_court_overlay}")
         except Exception as exc:
             print(f"⚠️ Error en calibración de cancha: {exc}")
+
+    render_kwargs = {}
+    if args.detect_bounces and args.bounce_visuals:
+        render_kwargs["bounces_df"] = df_bounces
+        render_kwargs["bounce_topk"] = args.bounce_topk
+    if args.detect_hits and args.hit_visuals:
+        render_kwargs["hits_df"] = df_hits
+    if args.draw_players and df_players is not None and not df_players.empty:
+        render_kwargs["df_players"] = df_players
+    render_kwargs["draw_players"] = bool(args.draw_players)
+    if args.calibration_visuals and overlay_points is not None:
+        render_kwargs["calibration_points"] = overlay_points
+
+    render_video(
+        frames_raw=frames_raw,
+        df_detecciones=df_detecciones,
+        df_interpolado=df_interpolado,
+        output_video=output_video,
+        fps=video_info.fps,
+        frame_width=video_info.frame_width,
+        frame_height=video_info.frame_height,
+        total_frames=video_info.total_frames,
+        no_gui=args.no_gui,
+        **render_kwargs,
+    )
+
+    print(f"\n✅ Video guardado: {output_video}")
+    print(f"📄 CSV detecciones: {output_csv}")
+    print(f"📈 CSV interpolado: {output_csv_interpolado}")
+
+    save_direction_plots(df_interpolado, output_angle_png, output_rose_png)
+    print(f"📊 Gráficos generados: {output_rose_png.name}, {output_angle_png.name}")
+
+    if H is not None:
+        df_metros = apply_homography(df_interpolado, H, float(video_info.fps))
+        df_metros.to_csv(output_csv_metros, index=False)
+        print(f"📏 CSV en metros: {output_csv_metros}")
+
+        if overlay_frame is not None and overlay_points is not None:
+            draw_court_overlay(overlay_frame, overlay_points, output_court_overlay)
+            print(f"🧭 Overlay de cancha: {output_court_overlay}")
 
     if args.detect_bounces:
         output_bounces.parent.mkdir(parents=True, exist_ok=True)
