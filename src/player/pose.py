@@ -26,6 +26,24 @@ def _distance(p1: tuple[float, float], p2: tuple[float, float]) -> float:
     return float(np.hypot(p1[0] - p2[0], p1[1] - p2[1]))
 
 
+def _bbox_iou(a: dict[str, float], b: dict[str, float]) -> float:
+    ax1, ay1, ax2, ay2 = float(a["x1"]), float(a["y1"]), float(a["x2"]), float(a["y2"])
+    bx1, by1, bx2, by2 = float(b["x1"]), float(b["y1"]), float(b["x2"]), float(b["y2"])
+
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+
+    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+    union = area_a + area_b - inter
+    return float(inter / union) if union > 0 else 0.0
+
+
+
 def select_near_far_people(
     candidates: list[dict[str, float]],
     W: int,
@@ -33,25 +51,23 @@ def select_near_far_people(
     prev_near: dict[str, float] | None = None,
     prev_far: dict[str, float] | None = None,
     cfg: dict[str, float | int] | None = None,
-) -> tuple[dict[str, float] | None, dict[str, float] | None]:
-    """Select near/far players robustly while avoiding sideline people.
-
-    Strategy:
-    - keep top-K by confidence,
-    - gate by far-baseline x-range from calibration when available,
-    - else gate by foot-x in [player_xgate_left*W, player_xgate_right*W],
-    - near=max(y2), far=min(y2) with optional temporal stabilization.
-    """
+) -> tuple[dict[str, float] | None, dict[str, float] | None, dict[str, float | bool]]:
+    """Select near/far players with strict x-gating and temporal stability."""
     if not candidates:
-        return None, None
+        return None, None, {"gate_fallback": False, "gate_left_px": 0.0, "gate_right_px": float(W)}
 
     cfg = cfg or {}
     top_k = int(cfg.get("top_k", 10))
     xgate_left_frac = float(cfg.get("player_xgate_left", 0.18))
     xgate_right_frac = float(cfg.get("player_xgate_right", 0.82))
     temporal_max_dist_frac = float(cfg.get("temporal_max_dist_frac", 0.25))
+    min_conf = float(cfg.get("player_min_conf", 0.3))
 
-    sorted_by_conf = sorted(candidates, key=lambda item: float(item["conf"]), reverse=True)[: max(2, top_k)]
+    conf_filtered = [c for c in candidates if float(c.get("conf", 0.0)) >= min_conf]
+    if not conf_filtered:
+        return None, None, {"gate_fallback": True, "gate_left_px": 0.0, "gate_right_px": float(W)}
+
+    sorted_by_conf = sorted(conf_filtered, key=lambda item: float(item["conf"]), reverse=True)[: max(2, top_k)]
 
     cal_far_left_x = cfg.get("calibration_far_left_x")
     cal_far_right_x = cfg.get("calibration_far_right_x")
@@ -65,40 +81,54 @@ def select_near_far_people(
         max_foot_x = max(xgate_left_frac, xgate_right_frac) * float(W)
 
     gated = [p for p in sorted_by_conf if min_foot_x <= _foot_x(p) <= max_foot_x]
-    pool = gated if len(gated) >= 2 else sorted_by_conf
+    gate_fallback = len(gated) == 0
+    pool = gated if gated else sorted_by_conf
 
     if len(pool) == 1:
-        return pool[0], None
+        return pool[0], None, {"gate_fallback": gate_fallback, "gate_left_px": min_foot_x, "gate_right_px": max_foot_x}
 
-    near_default = max(pool, key=lambda item: float(item["y2"]))
-    far_default = min((p for p in pool if p is not near_default), key=lambda item: float(item["y2"]), default=None)
-
-    if prev_near is None and prev_far is None:
-        return near_default, far_default
+    near_default = max(pool, key=lambda item: _bbox_center(item)[1])
+    far_default = min((p for p in pool if p is not near_default), key=lambda item: _bbox_center(item)[1], default=None)
 
     max_temporal_dist = temporal_max_dist_frac * float(np.hypot(W, H))
 
-    def _closest(prev_person: dict[str, float] | None, fallback: dict[str, float] | None, banned: set[int]) -> dict[str, float] | None:
+    def _prefer_temporal(
+        prev_person: dict[str, float] | None,
+        fallback: dict[str, float] | None,
+        options: list[dict[str, float]],
+    ) -> dict[str, float] | None:
+        if fallback is None:
+            return None
         if prev_person is None:
             return fallback
+
         prev_center = _bbox_center(prev_person)
-        options = [p for p in pool if id(p) not in banned]
-        if not options:
-            return fallback
-        best = min(options, key=lambda p: _distance(_bbox_center(p), prev_center))
+        ranked = sorted(
+            options,
+            key=lambda p: (
+                -_bbox_iou(p, prev_person),
+                _distance(_bbox_center(p), prev_center),
+            ),
+        )
+        best = ranked[0] if ranked else fallback
         if _distance(_bbox_center(best), prev_center) <= max_temporal_dist:
             return best
         return fallback
 
-    near = _closest(prev_near, near_default, banned=set())
-    banned_ids = {id(near)} if near is not None else set()
-    far = _closest(prev_far, far_default, banned=banned_ids)
+    near = _prefer_temporal(prev_near, near_default, pool)
+    far_options = [p for p in pool if p is not near]
+    far = _prefer_temporal(prev_far, far_default, far_options) if far_options else None
 
     if near is not None and far is near:
         alternatives = [p for p in pool if p is not near]
-        far = min(alternatives, key=lambda item: float(item["y2"]), default=None)
+        far = min(alternatives, key=lambda item: _bbox_center(item)[1], default=None)
 
-    return near, far
+    debug = {
+        "gate_fallback": gate_fallback,
+        "gate_left_px": float(min_foot_x),
+        "gate_right_px": float(max_foot_x),
+    }
+    return near, far, debug
 
 
 def ensure_pose_model(weights_path: Path) -> Path:
@@ -156,6 +186,9 @@ def detect_players(
         "wrist_r_x",
         "wrist_r_y",
         "conf",
+        "gate_fallback",
+        "gate_left_px",
+        "gate_right_px",
     ]
     if not frames_raw:
         return pd.DataFrame(columns=columns)
@@ -214,7 +247,7 @@ def detect_players(
             continue
 
         H, W = frame.shape[:2]
-        near_person, far_person = select_near_far_people(
+        near_person, far_person, debug_info = select_near_far_people(
             candidates=people,
             W=int(W),
             H=int(H),
@@ -232,6 +265,9 @@ def detect_players(
                     "frame": frame_idx,
                     "player": label,
                     **person,
+                    "gate_fallback": bool(debug_info.get("gate_fallback", False)),
+                    "gate_left_px": float(debug_info.get("gate_left_px", np.nan)),
+                    "gate_right_px": float(debug_info.get("gate_right_px", np.nan)),
                 }
             )
         prev_near = near_person if near_person is not None else prev_near

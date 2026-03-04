@@ -74,7 +74,7 @@ Video extension is not hardcoded; OpenCV `VideoCapture` is used. Existing comman
 - **`Video file not found` or `Could not open video`**: verify `--video`, codec support, and OpenCV backend.
 - **Pose model missing** (`Pose model not found at models/yolov8n-pose.pt`): download manually; code does not auto-download pose weights.
 - **No detections found**: validate ball model quality/domain match for the specific video.
-- **No bounces/hits detected**: adjust bounce CLI thresholds; hit thresholds are currently hardcoded in `detect_hits(...)`.
+- **No bounces/hits detected**: adjust bounce CLI thresholds (`--bounce-speed-min`, `--bounce-min-drop-px`, `--bounce-score-threshold`); hit thresholds are currently hardcoded in `detect_hits(...)`.
 - **No metric output (`detecciones_metros.csv`)**: calibration may fail or confidence may be `< 0.4` in auto mode.
 - **GUI errors on server/headless machine**: add `--no-gui`.
 - **Imports fail (`No module named ball/...`)**: run from repo root as `python src/main.py`.

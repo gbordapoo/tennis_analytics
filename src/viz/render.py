@@ -36,6 +36,16 @@ def _build_players_by_frame(df_players: pd.DataFrame | None) -> dict[int, dict[s
             val = getattr(row, col) if hasattr(row, col) else np.nan
             record[col] = float(val) if pd.notna(val) else np.nan
 
+        if hasattr(row, "gate_fallback"):
+            val = getattr(row, "gate_fallback")
+            record["gate_fallback"] = bool(val) if pd.notna(val) else False
+        if hasattr(row, "gate_left_px"):
+            val = getattr(row, "gate_left_px")
+            record["gate_left_px"] = float(val) if pd.notna(val) else np.nan
+        if hasattr(row, "gate_right_px"):
+            val = getattr(row, "gate_right_px")
+            record["gate_right_px"] = float(val) if pd.notna(val) else np.nan
+
         players_by_frame.setdefault(int(frame), {})[str(player)] = record
 
     return players_by_frame
@@ -96,7 +106,9 @@ def render_video(
     out = cv2.VideoWriter(str(output_video), cv2.VideoWriter_fourcc(*"mp4v"), float(fps), (frame_width, frame_height))
     print("\n🎬 Renderizando video con interpolación y extrapolación...\n")
 
-    bounce_by_frame: dict[int, tuple[float, float, float]] = {}
+    bounce_by_frame: dict[int, tuple[float, float, float, bool]] = {}
+    bounce_top_candidates: list[tuple[int, float, float, float, bool]] = []
+    best_bounce_frame: int | None = None
     if bounces_df is not None and not bounces_df.empty:
         k = max(1, int(bounce_topk))
         df_bounce_top = bounces_df.sort_values("bounce_score", ascending=False).head(k)
@@ -105,7 +117,11 @@ def render_video(
             cx = float(bounce["cx"])
             cy = float(bounce["cy"])
             score = float(bounce["bounce_score"])
-            bounce_by_frame[frame_bounce] = (cx, cy, score)
+            selected = bool(bounce["selected"]) if "selected" in bounces_df.columns else score >= 0.2
+            bounce_top_candidates.append((frame_bounce, cx, cy, score, selected))
+            bounce_by_frame[frame_bounce] = (cx, cy, score, selected)
+        if bounce_top_candidates:
+            best_bounce_frame = bounce_top_candidates[0][0]
 
     hit_by_frame: dict[int, tuple[float, float, float]] = {}
     if hits_df is not None and not hits_df.empty:
@@ -150,8 +166,25 @@ def render_video(
                 cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 log_line += f" ✔️ Detected ({conf:.2f})"
 
-        if draw_players and frame_id in players_by_frame:
-            _draw_players(frame, players_by_frame[frame_id])
+        frame_players = players_by_frame.get(frame_id, {}) if draw_players else {}
+        if draw_players and frame_players:
+            _draw_players(frame, frame_players)
+
+        if draw_players and frame_players:
+            gate_left, gate_right = None, None
+            gate_fallback = False
+            for pdata in frame_players.values():
+                if np.isfinite(pdata.get("gate_left_px", np.nan)):
+                    gate_left = int(round(float(pdata["gate_left_px"])))
+                if np.isfinite(pdata.get("gate_right_px", np.nan)):
+                    gate_right = int(round(float(pdata["gate_right_px"])))
+                gate_fallback = gate_fallback or bool(pdata.get("gate_fallback", False))
+            if gate_left is not None and gate_right is not None:
+                cv2.line(frame, (gate_left, 0), (gate_left, frame_height - 1), (0, 200, 255), 1)
+                cv2.line(frame, (gate_right, 0), (gate_right, frame_height - 1), (0, 200, 255), 1)
+                cv2.putText(frame, "x-gate", (gate_left + 4, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
+            if gate_fallback:
+                cv2.putText(frame, "WARN: gate fallback", (15, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
         if calibration_poly is not None:
             cv2.polylines(frame, [calibration_poly], True, (0, 255, 255), 2)
@@ -184,22 +217,21 @@ def render_video(
                     )
                     log_line += f" 🔵 Hit ({hscore:.2f})"
 
+        for cand_idx, (bframe, bx, by, bscore, selected) in enumerate(bounce_top_candidates, start=1):
+            if not (np.isfinite(bx) and np.isfinite(by)):
+                continue
+            ix, iy = int(round(bx)), int(round(by))
+            if not (0 <= ix < frame_width and 0 <= iy < frame_height):
+                continue
+            color = (0, 165, 255) if selected else (90, 90, 255)
+            radius = 18 if bframe == best_bounce_frame else 10
+            thickness = 3 if bframe == frame_id else 1
+            cv2.circle(frame, (ix, iy), radius, color, thickness)
+            cv2.putText(frame, f"B{cand_idx}:{bscore:.2f}", (ix + 8, max(20, iy - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+
         if frame_id in bounce_by_frame:
-            bx, by, bscore = bounce_by_frame[frame_id]
-            if np.isfinite(bx) and np.isfinite(by):
-                ix, iy = int(round(bx)), int(round(by))
-                if 0 <= ix < frame_width and 0 <= iy < frame_height:
-                    cv2.circle(frame, (ix, iy), 25, (0, 165, 255), 4)
-                    cv2.putText(
-                        frame,
-                        f"BOUNCE {bscore:.2f}",
-                        (ix + 12, max(30, iy - 15)),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        (0, 165, 255),
-                        2,
-                    )
-                    log_line += f" 🟠 Bounce ({bscore:.2f})"
+            bx, by, bscore, _ = bounce_by_frame[frame_id]
+            log_line += f" 🟠 Bounce ({bscore:.2f})"
 
         print(log_line)
         out.write(frame)

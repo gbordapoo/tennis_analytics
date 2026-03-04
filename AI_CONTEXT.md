@@ -85,6 +85,8 @@ python src/main.py --model models/best.pt --video videos/federer_murray_trim.mp4
   - `--bounce-min-frames-between` (8)
   - `--bounce-dy-threshold`/`--bounce-dy-threshold-px` (1.0)
   - `--bounce-score-threshold` (0.2)
+  - `--bounce-speed-min` (2.0)
+  - `--bounce-min-drop-px` (6.0)
   - `--bounce-exclude-post-hit` (4), `--bounce-exclude-pre-hit` (0)
   - `--bounce-out` (`bounces.csv`), `--bounce-best-out` (`bounce_best.json`)
   - `--bounce-max-gap-to-next-hit` (15)
@@ -94,6 +96,7 @@ python src/main.py --model models/best.pt --video videos/federer_murray_trim.mp4
   - `--pose-model` (`models/yolov8n-pose.pt`)
   - `--player-xgate-left` (0.18), `--player-xgate-right` (0.82)
   - `--player-calibration-margin-px` (20.0)
+  - `--player-min-conf` (0.3)
 - Hits:
   - `--detect-hits`, `--hit-out` (`hits.csv`), `--hit-visuals`
 
