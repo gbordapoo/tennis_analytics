@@ -39,11 +39,32 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--calibration", type=str, default=None, help="Path to manual calibration JSON file")
     parser.add_argument("--detect-bounces", action="store_true", help="Enable bounce detection (pixel domain)")
-    parser.add_argument("--bounce-out", type=str, default="outputs/bounces.csv", help="Path to bounces CSV output")
+    parser.add_argument("--bounce-visuals", action="store_true", help="Render bounce markers on output video")
+    parser.add_argument("--bounce-topk", type=int, default=3, help="Number of top bounce candidates to visualize")
+    parser.add_argument("--bounce-smooth-window", type=int, default=5, help="Bounce detector smoothing window size")
+    parser.add_argument(
+        "--bounce-min-frames-between",
+        type=int,
+        default=8,
+        help="Minimum frame distance between bounce candidates",
+    )
+    parser.add_argument(
+        "--bounce-dy-threshold-px",
+        type=float,
+        default=1.0,
+        help="Minimum vertical velocity change threshold in pixels",
+    )
+    parser.add_argument(
+        "--bounce-score-threshold",
+        type=float,
+        default=0.15,
+        help="Minimum bounce confidence score",
+    )
+    parser.add_argument("--bounce-out", type=str, default="bounces.csv", help="Path to bounces CSV output")
     parser.add_argument(
         "--bounce-best-out",
         type=str,
-        default="outputs/bounce_best.json",
+        default="bounce_best.json",
         help="Path to best bounce JSON output",
     )
     return parser.parse_args()
@@ -93,7 +114,19 @@ def main() -> None:
 
     df_bounces = None
     if args.detect_bounces:
-        df_bounces = detect_bounces(df_interpolado, fps=float(video_info.fps))
+        df_bounces = detect_bounces(
+            df_interpolado,
+            fps=float(video_info.fps),
+            smooth_window=args.bounce_smooth_window,
+            min_frames_between=args.bounce_min_frames_between,
+            dy_threshold_px=args.bounce_dy_threshold_px,
+            score_threshold=args.bounce_score_threshold,
+        )
+
+    render_kwargs = {}
+    if args.detect_bounces and args.bounce_visuals:
+        render_kwargs["df_bounces"] = df_bounces
+        render_kwargs["bounce_topk"] = args.bounce_topk
 
     render_video(
         frames_raw=frames_raw,
@@ -105,6 +138,7 @@ def main() -> None:
         frame_height=video_info.frame_height,
         total_frames=video_info.total_frames,
         no_gui=args.no_gui,
+        **render_kwargs,
     )
 
     print(f"\n✅ Video guardado: {output_video}")
@@ -158,7 +192,14 @@ def main() -> None:
         output_bounce_best.parent.mkdir(parents=True, exist_ok=True)
 
         if df_bounces is None:
-            df_bounces = detect_bounces(df_interpolado, fps=float(video_info.fps))
+            df_bounces = detect_bounces(
+                df_interpolado,
+                fps=float(video_info.fps),
+                smooth_window=args.bounce_smooth_window,
+                min_frames_between=args.bounce_min_frames_between,
+                dy_threshold_px=args.bounce_dy_threshold_px,
+                score_threshold=args.bounce_score_threshold,
+            )
 
         if not df_bounces.empty and H is not None:
             projected = project_points_to_meters(df_bounces[["cx", "cy"]].to_numpy(dtype="float32"), H)

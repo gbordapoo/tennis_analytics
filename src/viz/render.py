@@ -18,9 +18,22 @@ def render_video(
     frame_height: int,
     total_frames: int,
     no_gui: bool,
+    df_bounces: pd.DataFrame | None = None,
+    bounce_topk: int = 3,
 ) -> None:
     out = cv2.VideoWriter(str(output_video), cv2.VideoWriter_fourcc(*"mp4v"), float(fps), (frame_width, frame_height))
     print("\n🎬 Renderizando video con interpolación y extrapolación...\n")
+
+    bounce_by_frame: dict[int, tuple[float, float, float]] = {}
+    if df_bounces is not None and not df_bounces.empty:
+        k = max(1, int(bounce_topk))
+        df_bounce_top = df_bounces.sort_values("bounce_score", ascending=False).head(k)
+        for _, bounce in df_bounce_top.iterrows():
+            frame_bounce = int(bounce["frame_bounce"])
+            cx = float(bounce["cx"])
+            cy = float(bounce["cy"])
+            score = float(bounce["bounce_score"])
+            bounce_by_frame[frame_bounce] = (cx, cy, score)
 
     for i, frame in enumerate(frames_raw):
         frame_id = i + 1
@@ -54,6 +67,23 @@ def render_video(
                 cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
                 cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
                 log_line += f" ✔️ Detected ({conf:.2f})"
+
+        if frame_id in bounce_by_frame:
+            bx, by, bscore = bounce_by_frame[frame_id]
+            if np.isfinite(bx) and np.isfinite(by):
+                ix, iy = int(round(bx)), int(round(by))
+                if 0 <= ix < frame_width and 0 <= iy < frame_height:
+                    cv2.circle(frame, (ix, iy), 25, (0, 165, 255), 4)
+                    cv2.putText(
+                        frame,
+                        f"BOUNCE {bscore:.2f}",
+                        (ix + 12, max(30, iy - 15)),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7,
+                        (0, 165, 255),
+                        2,
+                    )
+                    log_line += f" 🟠 Bounce ({bscore:.2f})"
 
         print(log_line)
         out.write(frame)
