@@ -58,3 +58,16 @@ def apply_homography(df_interpolado: pd.DataFrame, H: np.ndarray, fps: float) ->
     df_out["speed_kmh"] = df_out["speed_mps"] * 3.6
 
     return df_out
+
+
+def project_points_to_meters(pixel_points: np.ndarray, H: np.ndarray) -> np.ndarray:
+    """
+    pixel_points: shape (N,2) float32 (cx, cy)
+    returns: shape (N,2) float32 (X_m, Y_m)
+    usa cv2.perspectiveTransform
+    """
+    pts = np.asarray(pixel_points, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] != 2:
+        raise ValueError(f"pixel_points must have shape (N,2), got {pts.shape}")
+
+    return cv2.perspectiveTransform(pts.reshape(-1, 1, 2), H).reshape(-1, 2)

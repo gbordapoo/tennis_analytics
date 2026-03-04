@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
+from ball.bounce import detect_bounces
 from ball.detect import load_model, run_detection
 from ball.track import interpolar_detecciones
 from court.auto_calibrate import draw_court_overlay, run_static_auto_calibration
-from court.homography import apply_homography, compute_homography, load_manual_calibration
+from court.homography import (
+    apply_homography,
+    compute_homography,
+    load_manual_calibration,
+    project_points_to_meters,
+)
 from viz.render import render_video, save_direction_plots
 
 
@@ -31,6 +38,14 @@ def parse_args() -> argparse.Namespace:
         help="Calibration mode for homography (Phase 1: auto behaves like static)",
     )
     parser.add_argument("--calibration", type=str, default=None, help="Path to manual calibration JSON file")
+    parser.add_argument("--detect-bounces", action="store_true", help="Enable bounce detection (pixel domain)")
+    parser.add_argument("--bounce-out", type=str, default="outputs/bounces.csv", help="Path to bounces CSV output")
+    parser.add_argument(
+        "--bounce-best-out",
+        type=str,
+        default="outputs/bounce_best.json",
+        help="Path to best bounce JSON output",
+    )
     return parser.parse_args()
 
 
@@ -56,6 +71,11 @@ def main() -> None:
     output_rose_png = outdir / "rosa_direcciones.png"
     output_court_overlay = outdir / "court_overlay.png"
 
+    bounce_out_path = Path(args.bounce_out)
+    output_bounces = bounce_out_path if bounce_out_path.is_absolute() else (outdir / bounce_out_path)
+    bounce_best_out_path = Path(args.bounce_best_out)
+    output_bounce_best = bounce_best_out_path if bounce_best_out_path.is_absolute() else (outdir / bounce_best_out_path)
+
     model = load_model(model_path)
     frames_raw, df_detecciones, video_info = run_detection(model, video_path)
     df_detecciones.to_csv(output_csv, index=False)
@@ -70,6 +90,10 @@ def main() -> None:
         extrap_frames=int(args.extrap),
     )
     df_interpolado.to_csv(output_csv_interpolado, index=False)
+
+    df_bounces = None
+    if args.detect_bounces:
+        df_bounces = detect_bounces(df_interpolado, fps=float(video_info.fps))
 
     render_video(
         frames_raw=frames_raw,
@@ -90,9 +114,9 @@ def main() -> None:
     save_direction_plots(df_interpolado, output_angle_png, output_rose_png)
     print(f"📊 Gráficos generados: {output_rose_png.name}, {output_angle_png.name}")
 
+    H = None
     if args.auto_calibrate:
         try:
-            H = None
             overlay_frame = None
             overlay_points = None
 
@@ -128,6 +152,40 @@ def main() -> None:
                     print(f"🧭 Overlay de cancha: {output_court_overlay}")
         except Exception as exc:
             print(f"⚠️ Error en calibración de cancha: {exc}")
+
+    if args.detect_bounces:
+        output_bounces.parent.mkdir(parents=True, exist_ok=True)
+        output_bounce_best.parent.mkdir(parents=True, exist_ok=True)
+
+        if df_bounces is None:
+            df_bounces = detect_bounces(df_interpolado, fps=float(video_info.fps))
+
+        if not df_bounces.empty and H is not None:
+            projected = project_points_to_meters(df_bounces[["cx", "cy"]].to_numpy(dtype="float32"), H)
+            df_bounces = df_bounces.copy()
+            df_bounces["X_m"] = projected[:, 0]
+            df_bounces["Y_m"] = projected[:, 1]
+
+        df_bounces.to_csv(output_bounces, index=False)
+        print(f"🏀 CSV botes: {output_bounces}")
+
+        if df_bounces.empty:
+            print("⚠️ No se detectaron botes confiables.")
+        else:
+            best = df_bounces.iloc[0]
+            payload = {
+                "frame": int(best["frame_bounce"]),
+                "cx": float(best["cx"]),
+                "cy": float(best["cy"]),
+                "bounce_score": float(best["bounce_score"]),
+            }
+            if "X_m" in df_bounces.columns and "Y_m" in df_bounces.columns:
+                payload["X_m"] = float(best["X_m"])
+                payload["Y_m"] = float(best["Y_m"])
+
+            with output_bounce_best.open("w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+            print(f"🥇 Mejor bote: {output_bounce_best}")
 
 
 if __name__ == "__main__":
