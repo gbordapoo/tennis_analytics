@@ -49,6 +49,8 @@ def detect_hits(
     df_players: pd.DataFrame,
     min_frames_between: int = 6,
     dist_px: float = 80,
+    far_dist_scale: float = 0.40,
+    near_dist_scale: float = 0.30,
     angle_change_deg: float = 60,
     score_threshold: float = 0.4,
 ) -> pd.DataFrame:
@@ -95,18 +97,26 @@ def detect_hits(
         ball_y = float(curr_row["cy"])
 
         best_player = None
+        best_player_row: pd.Series | None = None
         best_distance = math.inf
         for _, player_row in players_t.iterrows():
             distance = _distance_to_player(ball_x, ball_y, player_row)
             if distance < best_distance:
                 best_distance = distance
                 best_player = str(player_row["player"])
+                best_player_row = player_row
 
         if best_player is None:
             continue
 
-        if best_distance < float(dist_px) and angle_deg > float(angle_change_deg):
-            score = _clamp01(angle_deg / 180.0) * 0.7 + _clamp01((float(dist_px) - best_distance) / float(dist_px)) * 0.3
+        dynamic_dist_px = float(dist_px)
+        if best_player_row is not None and all(pd.notna(best_player_row.get(k)) for k in ["y1", "y2"]):
+            bbox_h = max(0.0, float(best_player_row["y2"]) - float(best_player_row["y1"]))
+            dist_scale = float(far_dist_scale) if best_player == "far" else float(near_dist_scale)
+            dynamic_dist_px = max(float(dist_px), bbox_h * dist_scale)
+
+        if best_distance < dynamic_dist_px and angle_deg > float(angle_change_deg):
+            score = _clamp01(angle_deg / 180.0) * 0.7 + _clamp01((dynamic_dist_px - best_distance) / dynamic_dist_px) * 0.3
             if score >= float(score_threshold):
                 candidates.append(
                     {
