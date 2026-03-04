@@ -121,6 +121,8 @@ def parse_args() -> argparse.Namespace:
         help="Path to best bounce JSON output",
     )
     parser.add_argument("--detect-players", action="store_true", help="Enable player pose detection")
+    parser.add_argument("--draw-players", dest="draw_players", action="store_true", default=True, help="Draw near/far player boxes in output video")
+    parser.add_argument("--no-draw-players", dest="draw_players", action="store_false", help="Disable player box rendering")
     parser.add_argument("--pose-model", type=str, default="models/yolov8n-pose.pt", help="Path to YOLO pose model")
     parser.add_argument("--pose-download", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--detect-hits", action="store_true", help="Enable hit detection")
@@ -233,6 +235,9 @@ def main() -> None:
         render_kwargs["bounce_topk"] = args.bounce_topk
     if args.detect_hits and args.hit_visuals:
         render_kwargs["hits_df"] = df_hits
+    if args.draw_players and df_players is not None and not df_players.empty:
+        render_kwargs["df_players"] = df_players
+    render_kwargs["draw_players"] = bool(args.draw_players)
 
     render_video(
         frames_raw=frames_raw,
