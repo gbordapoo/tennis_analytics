@@ -88,7 +88,9 @@ def parse_args() -> argparse.Namespace:
         help="Minimum frame distance between bounce candidates",
     )
     parser.add_argument(
+        "--bounce-dy-threshold",
         "--bounce-dy-threshold-px",
+        dest="bounce_dy_threshold",
         type=float,
         default=1.0,
         help="Minimum vertical velocity change threshold in pixels",
@@ -96,8 +98,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--bounce-score-threshold",
         type=float,
-        default=0.15,
+        default=0.2,
         help="Minimum bounce confidence score",
+    )
+    parser.add_argument(
+        "--bounce-exclude-post-hit",
+        type=int,
+        default=4,
+        help="Frames to exclude after each hit when selecting bounces",
+    )
+    parser.add_argument(
+        "--bounce-exclude-pre-hit",
+        type=int,
+        default=0,
+        help="Frames to exclude before each hit when selecting bounces",
     )
     parser.add_argument("--bounce-out", type=str, default="bounces.csv", help="Path to bounces CSV output")
     parser.add_argument(
@@ -108,11 +122,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--detect-players", action="store_true", help="Enable player pose detection")
     parser.add_argument("--pose-model", type=str, default="models/yolov8n-pose.pt", help="Path to YOLO pose model")
-    parser.add_argument(
-        "--pose-download",
-        action="store_true",
-        help="Allow automatic pose-model download when --pose-model is missing",
-    )
+    parser.add_argument("--pose-download", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--detect-hits", action="store_true", help="Enable hit detection")
     parser.add_argument("--hit-out", type=str, default="hits.csv", help="Path to hits CSV output")
     parser.add_argument("--hit-visuals", action="store_true", help="Render hit markers on output video")
@@ -177,16 +187,7 @@ def main() -> None:
     df_hits = None
 
     if args.detect_players or args.detect_hits:
-        if pose_model_path.exists():
-            pose_weights = pose_model_path
-        elif args.pose_download:
-            pose_weights = ensure_pose_model(pose_model_path)
-        else:
-            raise FileNotFoundError(
-                f"Pose model not found at {pose_model_path}. "
-                "Download it to models/ or rerun with --pose-download"
-            )
-
+        pose_weights = ensure_pose_model(pose_model_path)
         df_players = detect_players(frames_raw, weights_path=pose_weights)
         output_players.parent.mkdir(parents=True, exist_ok=True)
         df_players.to_csv(output_players, index=False)
@@ -194,7 +195,7 @@ def main() -> None:
 
     if args.detect_hits:
         if df_players is None:
-            df_players = detect_players(frames_raw)
+            df_players = detect_players(frames_raw, weights_path=pose_weights)
             output_players.parent.mkdir(parents=True, exist_ok=True)
             df_players.to_csv(output_players, index=False)
             print(f"🧍 CSV jugadores: {output_players}")
@@ -209,8 +210,15 @@ def main() -> None:
             fps=float(video_info.fps),
             smooth_window=args.bounce_smooth_window,
             min_frames_between=args.bounce_min_frames_between,
-            dy_threshold_px=args.bounce_dy_threshold_px,
+            dy_threshold_px=args.bounce_dy_threshold,
             score_threshold=args.bounce_score_threshold,
+            hit_frames=(
+                df_hits["frame_hit"].astype(int).tolist()
+                if args.detect_hits and df_hits is not None and not df_hits.empty
+                else None
+            ),
+            exclude_post_hit=args.bounce_exclude_post_hit,
+            exclude_pre_hit=args.bounce_exclude_pre_hit,
         )
         if args.detect_hits and df_hits is not None and not df_hits.empty:
             df_bounces = _filter_bounces_with_next_hit(
@@ -295,8 +303,15 @@ def main() -> None:
                 fps=float(video_info.fps),
                 smooth_window=args.bounce_smooth_window,
                 min_frames_between=args.bounce_min_frames_between,
-                dy_threshold_px=args.bounce_dy_threshold_px,
+                dy_threshold_px=args.bounce_dy_threshold,
                 score_threshold=args.bounce_score_threshold,
+                hit_frames=(
+                    df_hits["frame_hit"].astype(int).tolist()
+                    if args.detect_hits and df_hits is not None and not df_hits.empty
+                    else None
+                ),
+                exclude_post_hit=args.bounce_exclude_post_hit,
+                exclude_pre_hit=args.bounce_exclude_pre_hit,
             )
             if args.detect_hits and df_hits is not None and not df_hits.empty:
                 df_bounces = _filter_bounces_with_next_hit(
