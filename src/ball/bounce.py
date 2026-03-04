@@ -11,11 +11,14 @@ def _clamp01(values: np.ndarray) -> np.ndarray:
 def detect_bounces(
     df: pd.DataFrame,
     fps: float,
-    smooth_window: int = 7,
+    smooth_window: int = 5,
     min_frames_between: int = 10,
-    dy_threshold_px: float = 3.0,
-    score_threshold: float = 0.5,
+    dy_threshold_px: float = 1.0,
+    score_threshold: float = 0.2,
     exclude_frames: set[int] | None = None,
+    hit_frames: list[int] | None = None,
+    exclude_post_hit: int = 4,
+    exclude_pre_hit: int = 0,
 ) -> pd.DataFrame:
     """
     Detecta botes usando SOLO señal en píxeles (cx, cy) del df interpolado.
@@ -108,6 +111,16 @@ def detect_bounces(
     candidate_df = candidate_df[candidate_df["bounce_score"] >= float(score_threshold)].copy()
     if exclude_frames:
         candidate_df = candidate_df[~candidate_df["frame_bounce"].astype(int).isin(exclude_frames)].copy()
+    if hit_frames:
+        exclude_ranges = [
+            (int(hit) - int(exclude_pre_hit), int(hit) + int(exclude_post_hit))
+            for hit in hit_frames
+        ]
+        candidate_df = candidate_df[
+            ~candidate_df["frame_bounce"].astype(int).apply(
+                lambda frame: any(start <= frame <= end for start, end in exclude_ranges)
+            )
+        ].copy()
     if candidate_df.empty:
         return pd.DataFrame(columns=out_cols)
 

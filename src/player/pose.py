@@ -12,24 +12,13 @@ RIGHT_WRIST_INDEX = 10
 
 
 def ensure_pose_model(weights_path: Path) -> Path:
-    """Ensure pose weights exist at a fixed local path."""
+    """Ensure pose weights exist locally and never auto-download them."""
     target = Path(weights_path).expanduser().resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
-
-    if target.exists():
-        return target
-
-    try:
-        model = YOLO("yolov8n-pose.pt")
-        source = Path(model.ckpt_path)
-        if not source.exists():
-            raise FileNotFoundError(f"Ultralytics checkpoint not found at {source}")
-        target.write_bytes(source.read_bytes())
-    except Exception as exc:
-        raise RuntimeError(
-            "Failed to download pose model automatically. "
-            f"Download 'yolov8n-pose.pt' manually and place it at {target}."
-        ) from exc
+    if not target.exists():
+        raise FileNotFoundError(
+            "Pose model not found at models/yolov8n-pose.pt. "
+            "Download it and place it in models/."
+        )
 
     return target
 
@@ -61,7 +50,7 @@ def _extract_wrist(keypoints_xy: Any, keypoints_conf: Any, index: int) -> tuple[
 
 def detect_players(
     frames_raw: list,
-    weights_path: str | Path = "yolov8n-pose.pt",
+    weights_path: str | Path = "models/yolov8n-pose.pt",
 ) -> pd.DataFrame:
     """Detect up to two players per frame and assign near/far labels."""
     columns = [
