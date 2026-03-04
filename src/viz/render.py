@@ -91,6 +91,7 @@ def render_video(
     bounce_topk: int = 3,
     df_players: pd.DataFrame | None = None,
     draw_players: bool = True,
+    calibration_points: np.ndarray | None = None,
 ) -> None:
     out = cv2.VideoWriter(str(output_video), cv2.VideoWriter_fourcc(*"mp4v"), float(fps), (frame_width, frame_height))
     print("\n🎬 Renderizando video con interpolación y extrapolación...\n")
@@ -113,6 +114,11 @@ def render_video(
             hit_by_frame[frame_hit] = (float(hit["cx"]), float(hit["cy"]), float(hit["hit_score"]))
 
     players_by_frame = _build_players_by_frame(df_players) if draw_players else {}
+    calibration_poly: np.ndarray | None = None
+    if calibration_points is not None:
+        points = np.asarray(calibration_points, dtype=np.float32)
+        if points.shape == (4, 2):
+            calibration_poly = points.astype(np.int32)
 
     for i, frame in enumerate(frames_raw):
         frame_id = i + 1
@@ -146,6 +152,20 @@ def render_video(
 
         if draw_players and frame_id in players_by_frame:
             _draw_players(frame, players_by_frame[frame_id])
+
+        if calibration_poly is not None:
+            cv2.polylines(frame, [calibration_poly], True, (0, 255, 255), 2)
+            for idx, (x, y) in enumerate(calibration_poly):
+                cv2.circle(frame, (int(x), int(y)), 5, (0, 0, 255), -1)
+                cv2.putText(
+                    frame,
+                    str(idx + 1),
+                    (int(x) + 8, int(y) - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 0),
+                    2,
+                )
 
         if frame_id in hit_by_frame:
             hx, hy, hscore = hit_by_frame[frame_id]
