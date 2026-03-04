@@ -14,6 +14,14 @@ def _bbox_center(person: dict[str, float]) -> tuple[float, float]:
     return (0.5 * (float(person["x1"]) + float(person["x2"])), 0.5 * (float(person["y1"]) + float(person["y2"])))
 
 
+def _foot_point(person: dict[str, float]) -> tuple[float, float]:
+    return (0.5 * (float(person["x1"]) + float(person["x2"])), float(person["y2"]))
+
+
+def _foot_x(person: dict[str, float]) -> float:
+    return _foot_point(person)[0]
+
+
 def _distance(p1: tuple[float, float], p2: tuple[float, float]) -> float:
     return float(np.hypot(p1[0] - p2[0], p1[1] - p2[1]))
 
@@ -30,7 +38,8 @@ def select_near_far_people(
 
     Strategy:
     - keep top-K by confidence,
-    - gate by center-x in [min_cx_frac*W, max_cx_frac*W],
+    - gate by far-baseline x-range from calibration when available,
+    - else gate by foot-x in [player_xgate_left*W, player_xgate_right*W],
     - near=max(y2), far=min(y2) with optional temporal stabilization.
     """
     if not candidates:
@@ -38,15 +47,24 @@ def select_near_far_people(
 
     cfg = cfg or {}
     top_k = int(cfg.get("top_k", 10))
-    min_cx_frac = float(cfg.get("min_cx_frac", 0.15))
-    max_cx_frac = float(cfg.get("max_cx_frac", 0.85))
+    xgate_left_frac = float(cfg.get("player_xgate_left", 0.18))
+    xgate_right_frac = float(cfg.get("player_xgate_right", 0.82))
     temporal_max_dist_frac = float(cfg.get("temporal_max_dist_frac", 0.25))
 
     sorted_by_conf = sorted(candidates, key=lambda item: float(item["conf"]), reverse=True)[: max(2, top_k)]
 
-    min_cx = min_cx_frac * float(W)
-    max_cx = max_cx_frac * float(W)
-    gated = [p for p in sorted_by_conf if min_cx <= _bbox_center(p)[0] <= max_cx]
+    cal_far_left_x = cfg.get("calibration_far_left_x")
+    cal_far_right_x = cfg.get("calibration_far_right_x")
+    cal_margin_px = float(cfg.get("calibration_x_margin_px", 20.0))
+
+    if cal_far_left_x is not None and cal_far_right_x is not None:
+        min_foot_x = min(float(cal_far_left_x), float(cal_far_right_x)) - cal_margin_px
+        max_foot_x = max(float(cal_far_left_x), float(cal_far_right_x)) + cal_margin_px
+    else:
+        min_foot_x = min(xgate_left_frac, xgate_right_frac) * float(W)
+        max_foot_x = max(xgate_left_frac, xgate_right_frac) * float(W)
+
+    gated = [p for p in sorted_by_conf if min_foot_x <= _foot_x(p) <= max_foot_x]
     pool = gated if len(gated) >= 2 else sorted_by_conf
 
     if len(pool) == 1:
