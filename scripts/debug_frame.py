@@ -25,8 +25,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--assert-far-not-sideline",
         action="store_true",
-        help="Fail if far player center_x < 0.2W for this frame",
+        help="Fail if far player foot_x is outside the configured court band",
     )
+    parser.add_argument("--xgate-left", type=float, default=0.18, help="Left frame fraction for sideline assertion")
+    parser.add_argument("--xgate-right", type=float, default=0.82, help="Right frame fraction for sideline assertion")
     return parser.parse_args()
 
 
@@ -62,7 +64,7 @@ def main() -> None:
             if player not in colors:
                 continue
             x1, y1, x2, y2 = (int(row["x1"]), int(row["y1"]), int(row["x2"]), int(row["y2"]))
-            cx = 0.5 * (float(row["x1"]) + float(row["x2"]))
+            foot_x = 0.5 * (float(row["x1"]) + float(row["x2"]))
             cv2.rectangle(frame, (x1, y1), (x2, y2), colors[player], 2)
             cv2.putText(frame, f"{player} conf={float(row.get('conf', np.nan)):.2f}", (x1, max(20, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, colors[player], 2)
 
@@ -70,8 +72,13 @@ def main() -> None:
                 if pd.notna(px) and pd.notna(py):
                     cv2.circle(frame, (int(px), int(py)), 4, colors[player], -1)
 
-            if args.assert_far_not_sideline and player == "far" and cx < 0.2 * W:
-                raise AssertionError(f"Far player looks like sideline selection: center_x={cx:.1f} < {0.2 * W:.1f}")
+            if args.assert_far_not_sideline and player == "far":
+                min_x = min(args.xgate_left, args.xgate_right) * W
+                max_x = max(args.xgate_left, args.xgate_right) * W
+                if not (min_x <= foot_x <= max_x):
+                    raise AssertionError(
+                        f"Far player looks like sideline selection: foot_x={foot_x:.1f} not in [{min_x:.1f}, {max_x:.1f}]"
+                    )
 
     if args.ball_csv:
         df_ball = pd.read_csv(args.ball_csv)

@@ -40,6 +40,32 @@ def _resolve_path(path_str: str, project_root: Path, script_dir: Path) -> Path:
     return project_candidate
 
 
+
+
+def _build_player_selection_cfg(args: argparse.Namespace, project_root: Path, script_dir: Path) -> dict[str, float | int]:
+    cfg: dict[str, float | int] = {
+        "player_xgate_left": args.player_xgate_left,
+        "player_xgate_right": args.player_xgate_right,
+    }
+
+    if args.calibration is None:
+        return cfg
+
+    calibration_path = _resolve_path(args.calibration, project_root, script_dir)
+
+    if not calibration_path.exists():
+        print(f"⚠️ Calibration file for player gate not found: {calibration_path}")
+        return cfg
+
+    try:
+        pixel_points, _ = load_manual_calibration(calibration_path)
+        cfg["calibration_far_left_x"] = float(pixel_points[2][0])
+        cfg["calibration_far_right_x"] = float(pixel_points[3][0])
+    except Exception as exc:
+        print(f"⚠️ Could not load calibration for player gate: {exc}")
+
+    return cfg
+
 def _filter_bounces_with_next_hit(df_bounces, df_hits, max_gap: int):
     if df_bounces.empty or df_hits is None or df_hits.empty:
         return df_bounces
@@ -124,6 +150,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--draw-players", dest="draw_players", action="store_true", default=True, help="Draw near/far player boxes in output video")
     parser.add_argument("--no-draw-players", dest="draw_players", action="store_false", help="Disable player box rendering")
     parser.add_argument("--pose-model", type=str, default="models/yolov8n-pose.pt", help="Path to YOLO pose model")
+    parser.add_argument(
+        "--player-xgate-left",
+        type=float,
+        default=0.18,
+        help="Left screen fraction used to gate player foot positions",
+    )
+    parser.add_argument(
+        "--player-xgate-right",
+        type=float,
+        default=0.82,
+        help="Right screen fraction used to gate player foot positions",
+    )
+    parser.add_argument(
+        "--player-calibration-margin-px",
+        type=float,
+        default=20.0,
+        help="Extra horizontal margin in pixels when using calibration far-left/far-right points for player gate",
+    )
     parser.add_argument("--pose-download", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--detect-hits", action="store_true", help="Enable hit detection")
     parser.add_argument("--hit-out", type=str, default="hits.csv", help="Path to hits CSV output")
@@ -143,6 +187,8 @@ def main() -> None:
     # Make paths robust regardless of where you run from
     script_dir = Path(__file__).resolve().parent
     project_root = script_dir.parent
+    player_selection_cfg = _build_player_selection_cfg(args, project_root, script_dir)
+    player_selection_cfg["calibration_x_margin_px"] = args.player_calibration_margin_px
     model_path = _resolve_path(args.model, project_root, script_dir)
     video_path = _resolve_path(args.video, project_root, script_dir)
     outdir = _resolve_path(args.outdir, project_root, script_dir)
@@ -190,14 +236,22 @@ def main() -> None:
 
     if args.detect_players or args.detect_hits:
         pose_weights = ensure_pose_model(pose_model_path)
-        df_players = detect_players(frames_raw, weights_path=pose_weights)
+        df_players = detect_players(
+            frames_raw,
+            weights_path=pose_weights,
+            selection_cfg=player_selection_cfg,
+        )
         output_players.parent.mkdir(parents=True, exist_ok=True)
         df_players.to_csv(output_players, index=False)
         print(f"🧍 CSV jugadores: {output_players}")
 
     if args.detect_hits:
         if df_players is None:
-            df_players = detect_players(frames_raw, weights_path=pose_weights)
+            df_players = detect_players(
+                frames_raw,
+                weights_path=pose_weights,
+                selection_cfg=player_selection_cfg,
+            )
             output_players.parent.mkdir(parents=True, exist_ok=True)
             df_players.to_csv(output_players, index=False)
             print(f"🧍 CSV jugadores: {output_players}")
