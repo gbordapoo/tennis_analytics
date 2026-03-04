@@ -46,6 +46,7 @@ def _build_player_selection_cfg(args: argparse.Namespace, project_root: Path, sc
     cfg: dict[str, float | int] = {
         "player_xgate_left": args.player_xgate_left,
         "player_xgate_right": args.player_xgate_right,
+        "player_min_conf": args.player_min_conf,
     }
 
     if args.calibration is None:
@@ -128,6 +129,8 @@ def parse_args() -> argparse.Namespace:
         default=0.2,
         help="Minimum bounce confidence score",
     )
+    parser.add_argument("--bounce-speed-min", type=float, default=2.0, help="Minimum speed (px/frame) for reliable bounce frames")
+    parser.add_argument("--bounce-min-drop-px", type=float, default=6.0, help="Minimum vertical drop/rise around bounce candidate")
     parser.add_argument(
         "--bounce-exclude-post-hit",
         type=int,
@@ -169,6 +172,7 @@ def parse_args() -> argparse.Namespace:
         default=20.0,
         help="Extra horizontal margin in pixels when using calibration far-left/far-right points for player gate",
     )
+    parser.add_argument("--player-min-conf", type=float, default=0.3, help="Minimum person confidence used for near/far assignment")
     parser.add_argument("--pose-download", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--detect-hits", action="store_true", help="Enable hit detection")
     parser.add_argument("--hit-out", type=str, default="hits.csv", help="Path to hits CSV output")
@@ -190,6 +194,7 @@ def main() -> None:
     project_root = script_dir.parent
     player_selection_cfg = _build_player_selection_cfg(args, project_root, script_dir)
     player_selection_cfg["calibration_x_margin_px"] = args.player_calibration_margin_px
+    player_selection_cfg["player_min_conf"] = args.player_min_conf
     model_path = _resolve_path(args.model, project_root, script_dir)
     video_path = _resolve_path(args.video, project_root, script_dir)
     outdir = _resolve_path(args.outdir, project_root, script_dir)
@@ -269,6 +274,9 @@ def main() -> None:
             min_frames_between=args.bounce_min_frames_between,
             dy_threshold_px=args.bounce_dy_threshold,
             score_threshold=args.bounce_score_threshold,
+            speed_min=args.bounce_speed_min,
+            min_drop_px=args.bounce_min_drop_px,
+            raw_detected_frames=df_detecciones["frame"].astype(int).tolist(),
             hit_frames=(
                 df_hits["frame_hit"].astype(int).tolist()
                 if args.detect_hits and df_hits is not None and not df_hits.empty
@@ -366,6 +374,9 @@ def main() -> None:
                 min_frames_between=args.bounce_min_frames_between,
                 dy_threshold_px=args.bounce_dy_threshold,
                 score_threshold=args.bounce_score_threshold,
+                speed_min=args.bounce_speed_min,
+                min_drop_px=args.bounce_min_drop_px,
+                raw_detected_frames=df_detecciones["frame"].astype(int).tolist(),
                 hit_frames=(
                     df_hits["frame_hit"].astype(int).tolist()
                     if args.detect_hits and df_hits is not None and not df_hits.empty
@@ -393,7 +404,8 @@ def main() -> None:
         if df_bounces.empty:
             print("⚠️ No se detectaron botes confiables.")
         else:
-            best = df_bounces.iloc[0]
+            selected_pool = df_bounces[df_bounces.get("selected", False)] if "selected" in df_bounces.columns else df_bounces
+            best = selected_pool.iloc[0] if not selected_pool.empty else df_bounces.iloc[0]
             payload = {
                 "frame": int(best["frame_bounce"]),
                 "cx": float(best["cx"]),

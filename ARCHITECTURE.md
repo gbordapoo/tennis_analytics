@@ -229,6 +229,8 @@ Loaded by `load_manual_calibration(path)`:
 - `--bounce-min-frames-between` (default: `8`) temporal suppression gap.
 - `--bounce-dy-threshold` / `--bounce-dy-threshold-px` (default: `1.0`) sign-flip threshold.
 - `--bounce-score-threshold` (default: `0.2`) minimum candidate score.
+- `--bounce-speed-min` (default: `2.0`) minimum speed for reliable bounce frames.
+- `--bounce-min-drop-px` (default: `6.0`) minimum drop/rise around local minimum.
 - `--bounce-exclude-post-hit` (default: `4`) exclude frames after hit.
 - `--bounce-exclude-pre-hit` (default: `0`) exclude frames before hit.
 - `--bounce-out` (default: `bounces.csv`) bounce CSV output path.
@@ -243,6 +245,7 @@ Loaded by `load_manual_calibration(path)`:
 - `--player-xgate-left` (default: `0.18`) left x-fraction gate.
 - `--player-xgate-right` (default: `0.82`) right x-fraction gate.
 - `--player-calibration-margin-px` (default: `20.0`) calibration-gate margin.
+- `--player-min-conf` (default: `0.3`) minimum person confidence for near/far assignment.
 - `--pose-download` (flag, suppressed help) currently parsed but not used.
 
 **Hit detection**
