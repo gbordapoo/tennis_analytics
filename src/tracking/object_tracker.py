@@ -1,12 +1,3 @@
-class SimpleTracker:
-    def __init__(self) -> None:
-        self.next_id = 0
-        self.objects = {}
+from .ball_track import SimpleBallTracker as SimpleTracker
 
-    def update(self, detections):
-        tracked = {}
-        for det in detections:
-            tracked[self.next_id] = det
-            self.next_id += 1
-        self.objects = tracked
-        return tracked
+__all__ = ["SimpleTracker"]
