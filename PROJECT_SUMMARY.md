@@ -22,13 +22,13 @@ This repository processes tennis match video using YOLO-based inference and rule
 Run from repo root.
 
 - Minimal run:
-  - `python src/main.py --model models/best.pt --video videos/federer_murray_trim.mp4 --outdir outputs`
+  - `python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs`
 - Headless/no GUI:
-  - `python src/main.py --model models/best.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui`
+  - `python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui`
 - Players + hits:
-  - `python src/main.py --model models/best.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui --detect-players --detect-hits --hit-visuals`
+  - `python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui --detect-players --detect-hits --hit-visuals`
 - Full features (players/hits/bounces/calibration):
-  - `python src/main.py --model models/best.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui --detect-players --detect-hits --hit-visuals --detect-bounces --bounce-visuals --auto-calibrate --calibration-visuals`
+  - `python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui --detect-players --detect-hits --hit-visuals --detect-bounces --bounce-visuals --auto-calibrate --calibration-visuals`
 - Manual calibration helper:
   - `python src/court/calibrate_click.py --video videos/federer_murray_trim.mp4 --output outputs/calibration.json`
 
@@ -36,7 +36,7 @@ Run from repo root.
 
 ### Inputs
 
-- Ball model weights (`--model`, default `../models/best.pt`).
+- Ball model weights (`--model`, default `models/yolo5_last.pt`).
 - Input video (`--video`, default `../videos/federer_murray_trim.mp4`).
 - Optional pose model (`--pose-model`, default `models/yolov8n-pose.pt`) for players/hits.
 - Optional manual calibration JSON (`--calibration`) for `--calibration-mode manual`.
@@ -80,3 +80,6 @@ Video extension is not hardcoded; OpenCV `VideoCapture` is used. Existing comman
 - **Imports fail (`No module named ball/...`)**: run from repo root as `python src/main.py`.
 - **Unexpected output path for hits/bounces**: relative `--hit-out`, `--bounce-out`, `--bounce-best-out` are joined under `--outdir`.
 - **Manual calibration rejected**: ensure JSON has `pixel_points` and `world_points_m`, each shape `(4,2)`.
+
+
+- Court keypoints model path: `models/keypoints_model.pth` (loaded once on first frame and reused).

@@ -48,6 +48,69 @@ def _bbox_iou(a: dict[str, float], b: dict[str, float]) -> float:
     return float(inter / union) if union > 0 else 0.0
 
 
+def choose_players_by_keypoints(
+    court_keypoints: list[float] | None,
+    player_dict_frame: dict[int, dict[str, float]],
+    band_margin_px: float = 80.0,
+) -> list[int]:
+    if not player_dict_frame:
+        return []
+
+    if court_keypoints is None or len(court_keypoints) < 4:
+        return list(player_dict_frame.keys())[:2]
+
+    kp_pairs = [(float(court_keypoints[i]), float(court_keypoints[i + 1])) for i in range(0, min(len(court_keypoints), 28), 2)]
+    ys = [p[1] for p in kp_pairs]
+    band_min = min(ys) - float(band_margin_px)
+    band_max = max(ys) + float(band_margin_px)
+
+    ranking: list[tuple[float, int]] = []
+    for track_id, bbox in player_dict_frame.items():
+        cx = 0.5 * (float(bbox["x1"]) + float(bbox["x2"]))
+        cy = 0.5 * (float(bbox["y1"]) + float(bbox["y2"]))
+        foot_y = float(bbox["y2"])
+        if foot_y < band_min or foot_y > band_max:
+            continue
+        min_dist = min(_distance((cx, cy), kp) for kp in kp_pairs)
+        ranking.append((min_dist, int(track_id)))
+
+    if len(ranking) < 2:
+        for track_id, bbox in player_dict_frame.items():
+            cx = 0.5 * (float(bbox["x1"]) + float(bbox["x2"]))
+            cy = 0.5 * (float(bbox["y1"]) + float(bbox["y2"]))
+            min_dist = min(_distance((cx, cy), kp) for kp in kp_pairs)
+            ranking.append((min_dist, int(track_id)))
+
+    ranking.sort(key=lambda item: item[0])
+    chosen: list[int] = []
+    for _, tid in ranking:
+        if tid not in chosen:
+            chosen.append(tid)
+        if len(chosen) == 2:
+            break
+    return chosen
+
+
+def filter_to_chosen_ids(
+    player_dict_frame: dict[int, dict[str, float]],
+    chosen_ids: list[int],
+) -> dict[int, dict[str, float]]:
+    return {tid: person for tid, person in player_dict_frame.items() if tid in chosen_ids}
+
+
+def label_far_near(player_dict: dict[int, dict[str, float]]) -> tuple[int | None, int | None]:
+    if not player_dict:
+        return None, None
+    ordered = sorted(player_dict.items(), key=lambda item: float(item[1]["y2"]))
+    if len(ordered) == 1:
+        return int(ordered[0][0]), None
+    far_id = int(ordered[0][0])
+    near_id = int(ordered[-1][0])
+    if far_id == near_id:
+        return far_id, None
+    return far_id, near_id
+
+
 def point_in_poly(point: tuple[float, float], poly: np.ndarray | None) -> bool:
     if poly is None:
         return False
@@ -317,29 +380,9 @@ def detect_players(
 ) -> pd.DataFrame:
     """Detect up to two players per frame and assign near/far labels."""
     columns = [
-        "frame",
-        "player",
-        "x1",
-        "y1",
-        "x2",
-        "y2",
-        "wrist_l_x",
-        "wrist_l_y",
-        "wrist_r_x",
-        "wrist_r_y",
-        "conf",
-        "track_id",
-        "gate_fallback",
-        "gate_left_px",
-        "gate_right_px",
-        "selection_fallback",
-        "far_candidates",
-        "near_candidates",
-        "filtered_out",
-        "foot_x",
-        "foot_y",
-        "far_poly",
-        "near_poly",
+        "frame", "player", "x1", "y1", "x2", "y2", "wrist_l_x", "wrist_l_y", "wrist_r_x", "wrist_r_y",
+        "conf", "track_id", "gate_fallback", "gate_left_px", "gate_right_px", "selection_fallback",
+        "far_candidates", "near_candidates", "filtered_out", "foot_x", "foot_y", "far_poly", "near_poly",
     ]
     if not frames_raw:
         return pd.DataFrame(columns=columns)
@@ -348,10 +391,15 @@ def detect_players(
 
     model = YOLO(str(weights_path))
     rows: list[dict[str, Any]] = []
-    prev_near: dict[str, float] | None = None
-    prev_far: dict[str, float] | None = None
     prev_tracks: dict[int, dict[str, float]] = {}
     next_track_id = 1
+    cfg = selection_cfg or {}
+    min_conf = float(cfg.get("player_min_conf", 0.3))
+    court_keypoints = cfg.get("court_keypoints_14")
+    missing_both_frames = 0
+    reselection_threshold = int(cfg.get("player_reselect_missing_frames", 15))
+    chosen_ids: list[int] = []
+    debug_log = bool(cfg.get("player_debug_log", False))
 
     for frame_idx, frame in enumerate(frames_raw, start=1):
         results = model(frame, verbose=False)
@@ -361,7 +409,6 @@ def detect_players(
             boxes = result.boxes
             if boxes is None or len(boxes) == 0:
                 continue
-
             keypoints = result.keypoints
             keypoints_xy = keypoints.xy.cpu().numpy() if keypoints is not None and keypoints.xy is not None else None
             keypoints_conf = keypoints.conf.cpu().numpy() if keypoints is not None and keypoints.conf is not None else None
@@ -370,98 +417,90 @@ def detect_players(
                 cls_id = int(box.cls[0]) if box.cls is not None else -1
                 if cls_id != 0:
                     continue
-
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
                 conf = float(box.conf[0]) if box.conf is not None else 0.0
+                if conf < min_conf:
+                    continue
 
                 person_kp_xy = keypoints_xy[person_idx] if keypoints_xy is not None and person_idx < len(keypoints_xy) else None
-                person_kp_conf = (
-                    keypoints_conf[person_idx] if keypoints_conf is not None and person_idx < len(keypoints_conf) else None
-                )
-
+                person_kp_conf = keypoints_conf[person_idx] if keypoints_conf is not None and person_idx < len(keypoints_conf) else None
                 wrist_l_x, wrist_l_y = _extract_wrist(person_kp_xy, person_kp_conf, LEFT_WRIST_INDEX)
                 wrist_r_x, wrist_r_y = _extract_wrist(person_kp_xy, person_kp_conf, RIGHT_WRIST_INDEX)
 
-                people.append(
-                    {
-                        "x1": float(x1),
-                        "y1": float(y1),
-                        "x2": float(x2),
-                        "y2": float(y2),
-                        "wrist_l_x": wrist_l_x,
-                        "wrist_l_y": wrist_l_y,
-                        "wrist_r_x": wrist_r_x,
-                        "wrist_r_y": wrist_r_y,
-                        "conf": conf,
-                    }
-                )
+                people.append({
+                    "x1": float(x1), "y1": float(y1), "x2": float(x2), "y2": float(y2),
+                    "wrist_l_x": wrist_l_x, "wrist_l_y": wrist_l_y, "wrist_r_x": wrist_r_x, "wrist_r_y": wrist_r_y,
+                    "conf": conf,
+                })
 
-        if not people:
-            continue
+        assigned_ids: set[int] = set()
+        for person in people:
+            best_track = None
+            best_iou = 0.0
+            for track_id, prev_person in prev_tracks.items():
+                if track_id in assigned_ids:
+                    continue
+                iou = _bbox_iou(person, prev_person)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_track = track_id
+            if best_track is not None and best_iou >= 0.3:
+                person["track_id"] = best_track
+                assigned_ids.add(best_track)
+            else:
+                person["track_id"] = next_track_id
+                assigned_ids.add(next_track_id)
+                next_track_id += 1
+        prev_tracks = {int(p["track_id"]): p for p in people}
 
-        if people:
-            assigned_ids: set[int] = set()
-            for person in people:
-                best_track = None
-                best_iou = 0.0
-                for track_id, prev_person in prev_tracks.items():
-                    if track_id in assigned_ids:
-                        continue
-                    iou = _bbox_iou(person, prev_person)
-                    if iou > best_iou:
-                        best_iou = iou
-                        best_track = track_id
-                if best_track is not None and best_iou >= 0.3:
-                    person["track_id"] = best_track
-                    assigned_ids.add(best_track)
-                else:
-                    person["track_id"] = next_track_id
-                    assigned_ids.add(next_track_id)
-                    next_track_id += 1
-            prev_tracks = {int(p["track_id"]): p for p in people}
+        people_by_id = {int(p["track_id"]): p for p in people}
+        if not chosen_ids and people_by_id:
+            chosen_ids = choose_players_by_keypoints(court_keypoints, people_by_id)
+            if debug_log:
+                print(f"[players] initial chosen_ids={chosen_ids}")
 
-        H, W = frame.shape[:2]
-        near_person, far_person, debug_info = select_near_far_people(
-            candidates=people,
-            W=int(W),
-            H=int(H),
-            prev_near=prev_near,
-            prev_far=prev_far,
-            cfg=selection_cfg,
-        )
+        selected_by_id = filter_to_chosen_ids(people_by_id, chosen_ids)
+        if not selected_by_id:
+            missing_both_frames += 1
+            if missing_both_frames > reselection_threshold and people_by_id:
+                chosen_ids = choose_players_by_keypoints(court_keypoints, people_by_id)
+                selected_by_id = filter_to_chosen_ids(people_by_id, chosen_ids)
+                missing_both_frames = 0
+                if debug_log:
+                    print(f"[players][frame={frame_idx}] reselection chosen_ids={chosen_ids}")
+        else:
+            missing_both_frames = 0
 
-        selected = [("near", near_person), ("far", far_person)]
-        for label, person in selected:
+        far_id, near_id = label_far_near(selected_by_id)
+        far_person = selected_by_id.get(far_id) if far_id is not None else None
+        near_person = selected_by_id.get(near_id) if near_id is not None else None
+
+        for label, person in (("far", far_person), ("near", near_person)):
             if person is None:
                 continue
             fpx, fpy = foot_point(person)
-            rows.append(
-                {
-                    "frame": frame_idx,
-                    "player": label,
-                    **person,
-                    "gate_fallback": bool(debug_info.get("gate_fallback", False)),
-                    "gate_left_px": float(debug_info.get("gate_left_px", np.nan)),
-                    "gate_right_px": float(debug_info.get("gate_right_px", np.nan)),
-                    "selection_fallback": bool(debug_info.get("selection_fallback", False)),
-                    "far_candidates": int(debug_info.get("far_candidates", 0)),
-                    "near_candidates": int(debug_info.get("near_candidates", 0)),
-                    "filtered_out": int(debug_info.get("filtered_out", 0)),
-                    "foot_x": float(fpx),
-                    "foot_y": float(fpy),
-                    "far_poly": np.array2string(np.asarray(debug_info.get("far_poly", np.empty((0, 2)))), precision=1),
-                    "near_poly": np.array2string(np.asarray(debug_info.get("near_poly", np.empty((0, 2)))), precision=1),
-                }
-            )
-        if selection_cfg and bool(selection_cfg.get("player_debug_log", False)):
+            rows.append({
+                "frame": frame_idx,
+                "player": label,
+                **person,
+                "gate_fallback": False,
+                "gate_left_px": np.nan,
+                "gate_right_px": np.nan,
+                "selection_fallback": False,
+                "far_candidates": len(selected_by_id),
+                "near_candidates": len(selected_by_id),
+                "filtered_out": max(0, len(people_by_id) - len(selected_by_id)),
+                "foot_x": float(fpx),
+                "foot_y": float(fpy),
+                "far_poly": "[]",
+                "near_poly": "[]",
+            })
+
+        if debug_log:
             print(
-                f"[players][frame={frame_idx}] far_id={int(debug_info.get('far_track_id', -1))} "
-                f"near_id={int(debug_info.get('near_track_id', -1))} "
-                f"far_candidates={int(debug_info.get('far_candidates', 0))} "
-                f"near_candidates={int(debug_info.get('near_candidates', 0))} "
-                f"filtered={int(debug_info.get('filtered_out', 0))}"
+                f"[players][frame={frame_idx}] chosen={chosen_ids} "
+                f"visible={list(selected_by_id.keys())} far_id={far_id if far_id is not None else -1} "
+                f"near_id={near_id if near_id is not None else -1}"
             )
-        prev_near = near_person if near_person is not None else prev_near
-        prev_far = far_person if far_person is not None else prev_far
 
     return pd.DataFrame(rows, columns=columns)

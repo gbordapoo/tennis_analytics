@@ -209,7 +209,7 @@ Loaded by `load_manual_calibration(path)`:
 ### `python src/main.py`
 
 **Core**
-- `--model` (default: `../models/best.pt`) path to ball YOLO weights.
+- `--model` (default: `models/yolo5_last.pt`) path to ball YOLO weights.
 - `--video` (default: `../videos/federer_murray_trim.mp4`) input video.
 - `--outdir` (default: `../outputs`) output directory.
 - `--extrap` (default: `5`) backward extrapolation frames.
@@ -301,3 +301,6 @@ Safe changes:
   - Skip optional expensive branches unless enabled by flags.
 - Constraints:
   - `frames_raw` stores all frames in memory (simple architecture, higher memory footprint on long videos).
+
+
+- Court keypoints model path: `models/keypoints_model.pth` (loaded once on first frame and reused).

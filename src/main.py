@@ -9,6 +9,7 @@ from ball.detect import load_model, run_detection
 from ball.hit import detect_hits
 from ball.track import interpolar_detecciones
 from court.auto_calibrate import draw_court_overlay, run_static_auto_calibration
+from court.keypoints import load_keypoints_model, predict_court_keypoints
 from court.homography import (
     apply_homography,
     compute_homography,
@@ -92,7 +93,7 @@ def _filter_bounces_with_next_hit(df_bounces, df_hits, max_gap: int):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="YOLOv8 Tennis Ball Detection + Interpolation/Extrapolation")
-    parser.add_argument("--model", type=str, default="../models/best.pt", help="Path to YOLOv8 .pt model")
+    parser.add_argument("--model", type=str, default="models/yolo5_last.pt", help="Path to YOLO ball detector .pt model")
     parser.add_argument("--video", type=str, default="../videos/federer_murray_trim.mp4", help="Path to input video")
     parser.add_argument("--outdir", type=str, default="../outputs", help="Output directory")
     parser.add_argument("--extrap", type=int, default=5, help="Number of frames to extrapolate backwards")
@@ -196,6 +197,9 @@ def parse_args() -> argparse.Namespace:
         default=15,
         help="Maximum allowed frame gap between bounce and its next hit",
     )
+    parser.add_argument("--debug-players", action="store_true", help="Draw and log selected near/far players")
+    parser.add_argument("--debug-court", action="store_true", help="Draw detected court keypoints (14 points)")
+    parser.add_argument("--debug-ball", action="store_true", help="Draw per-frame ball detection boxes")
     return parser.parse_args()
 
 
@@ -208,11 +212,12 @@ def main() -> None:
     player_selection_cfg = _build_player_selection_cfg(args, project_root, script_dir)
     player_selection_cfg["calibration_x_margin_px"] = args.player_calibration_margin_px
     player_selection_cfg["player_min_conf"] = args.player_min_conf
-    player_selection_cfg["player_debug_log"] = bool(args.detect_players)
+    player_selection_cfg["player_debug_log"] = bool(args.detect_players or args.debug_players)
     model_path = _resolve_path(args.model, project_root, script_dir)
     video_path = _resolve_path(args.video, project_root, script_dir)
     outdir = _resolve_path(args.outdir, project_root, script_dir)
     pose_model_path = _resolve_path(args.pose_model, project_root, script_dir)
+    keypoints_model_path = _resolve_path("models/keypoints_model.pth", project_root, script_dir)
 
     outdir.mkdir(parents=True, exist_ok=True)
 
@@ -237,6 +242,17 @@ def main() -> None:
 
     model = load_model(model_path)
     frames_raw, df_detecciones, video_info = run_detection(model, video_path)
+
+    court_kps: list[float] | None = None
+    if frames_raw:
+        try:
+            kp_model = load_keypoints_model(keypoints_model_path)
+            court_kps = predict_court_keypoints(frames_raw[0], kp_model)
+            player_selection_cfg["court_keypoints_14"] = court_kps
+            if args.debug_court:
+                print(f"[court] keypoints_14={court_kps}")
+        except Exception as exc:
+            print(f"⚠️ Could not infer court keypoints: {exc}")
     df_detecciones.to_csv(output_csv, index=False)
 
     if df_detecciones.empty:
@@ -368,6 +384,10 @@ def main() -> None:
         render_kwargs["df_players"] = df_players
     render_kwargs["draw_players"] = bool(args.draw_players)
     render_kwargs["draw_player_geometry"] = bool(args.player_geometry_visuals)
+    render_kwargs["draw_ball"] = bool(args.debug_ball)
+    render_kwargs["debug_players"] = bool(args.debug_players)
+    if args.debug_court and court_kps is not None:
+        render_kwargs["court_keypoints"] = court_kps
     if args.calibration_visuals and overlay_points is not None:
         render_kwargs["calibration_points"] = overlay_points
 

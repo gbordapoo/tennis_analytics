@@ -51,6 +51,9 @@ def _build_players_by_frame(df_players: pd.DataFrame | None) -> dict[int, dict[s
         if hasattr(row, "foot_y"):
             val = getattr(row, "foot_y")
             record["foot_y"] = float(val) if pd.notna(val) else np.nan
+        if hasattr(row, "track_id"):
+            val = getattr(row, "track_id")
+            record["track_id"] = int(val) if pd.notna(val) else -1
         if hasattr(row, "far_poly"):
             record["far_poly"] = getattr(row, "far_poly")
         if hasattr(row, "near_poly"):
@@ -74,7 +77,7 @@ def _parse_poly(poly_text: str | float | None) -> np.ndarray | None:
         return None
     return nums.reshape(-1, 2).astype(np.int32)
 
-def _draw_players(frame: np.ndarray, frame_players: dict[str, dict[str, float]], draw_player_geometry: bool = False) -> None:
+def _draw_players(frame: np.ndarray, frame_players: dict[str, dict[str, float]], draw_player_geometry: bool = False, debug_players: bool = False) -> None:
     colors = {
         "near": (255, 0, 255),
         "far": (0, 255, 255),
@@ -90,9 +93,10 @@ def _draw_players(frame: np.ndarray, frame_players: dict[str, dict[str, float]],
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
         conf_txt = f" {pdata['conf']:.2f}" if np.isfinite(pdata.get("conf", np.nan)) else ""
+        track_txt = f" id={int(pdata.get('track_id', -1))}" if debug_players and int(pdata.get('track_id', -1)) >= 0 else ""
         cv2.putText(
             frame,
-            f"{player_name}{conf_txt}",
+            f"{player_name}{track_txt}{conf_txt}",
             (x1, max(20, y1 - 8)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
@@ -130,6 +134,9 @@ def render_video(
     draw_player_geometry: bool = False,
     calibration_points: np.ndarray | None = None,
     bounce_best: dict[str, float | int] | None = None,
+    draw_ball: bool = True,
+    debug_players: bool = False,
+    court_keypoints: list[float] | None = None,
 ) -> None:
     out = cv2.VideoWriter(str(output_video), cv2.VideoWriter_fourcc(*"mp4v"), float(fps), (frame_width, frame_height))
     print("\n🎬 Renderizando video con interpolación y extrapolación...\n")
@@ -189,7 +196,7 @@ def render_video(
             cv2.arrowedLine(frame, (cx, cy), (fx, fy), (255, 255, 255), 2, tipLength=0.3)
 
         detecciones_frame = df_detecciones[df_detecciones["frame"] == frame_id]
-        if not detecciones_frame.empty:
+        if draw_ball and not detecciones_frame.empty:
             for _, d in detecciones_frame.iterrows():
                 x1, y1, x2, y2, conf = int(d["x1"]), int(d["y1"]), int(d["x2"]), int(d["y2"]), float(d["confidence"])
                 label = f"Ball {conf:.2f}"
@@ -199,7 +206,7 @@ def render_video(
 
         frame_players = players_by_frame.get(frame_id, {}) if draw_players else {}
         if draw_players and frame_players:
-            _draw_players(frame, frame_players, draw_player_geometry=draw_player_geometry)
+            _draw_players(frame, frame_players, draw_player_geometry=draw_player_geometry, debug_players=debug_players)
 
         if draw_players and frame_players:
             gate_left, gate_right = None, None
@@ -225,6 +232,14 @@ def render_video(
                     cv2.polylines(frame, [far_poly], True, (0, 255, 255), 2)
                 if near_poly is not None:
                     cv2.polylines(frame, [near_poly], True, (255, 0, 255), 2)
+
+
+        if court_keypoints is not None:
+            kps = [(court_keypoints[j], court_keypoints[j + 1]) for j in range(0, min(len(court_keypoints), 28), 2)]
+            for k_idx, (kx, ky) in enumerate(kps):
+                if np.isfinite(kx) and np.isfinite(ky):
+                    cv2.circle(frame, (int(round(kx)), int(round(ky))), 4, (50, 255, 50), -1)
+                    cv2.putText(frame, str(k_idx), (int(round(kx)) + 4, int(round(ky)) - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (50, 255, 50), 1)
 
         if calibration_poly is not None:
             cv2.polylines(frame, [calibration_poly], True, (0, 255, 255), 2)

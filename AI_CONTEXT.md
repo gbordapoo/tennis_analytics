@@ -63,13 +63,13 @@
 ### Minimal run
 
 ```bash
-python src/main.py --model models/best.pt --video videos/federer_murray_trim.mp4 --outdir outputs
+python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs
 ```
 
 ### Common flags (from `src/main.py`)
 
 - Core:
-  - `--model` (default `../models/best.pt`)
+  - `--model` (default `models/yolo5_last.pt`)
   - `--video` (default `../videos/federer_murray_trim.mp4`)
   - `--outdir` (default `../outputs`)
   - `--extrap` (default `5`)
@@ -161,3 +161,6 @@ python src/main.py --model models/best.pt --video videos/federer_murray_trim.mp4
   - call from `src/main.py`
   - add optional overlay in `src/viz/render.py`
   - define output CSV schema and persistence path.
+
+
+- Court keypoints model path: `models/keypoints_model.pth` (loaded once on first frame and reused).
