@@ -102,12 +102,13 @@ def render_video(
     df_players: pd.DataFrame | None = None,
     draw_players: bool = True,
     calibration_points: np.ndarray | None = None,
+    bounce_best: dict[str, float | int] | None = None,
 ) -> None:
     out = cv2.VideoWriter(str(output_video), cv2.VideoWriter_fourcc(*"mp4v"), float(fps), (frame_width, frame_height))
     print("\n🎬 Renderizando video con interpolación y extrapolación...\n")
 
-    bounce_by_frame: dict[int, tuple[float, float, float, bool]] = {}
-    bounce_top_candidates: list[tuple[int, float, float, float, bool]] = []
+    bounce_by_frame: dict[int, tuple[float, float, float, bool, str]] = {}
+    bounce_top_candidates: list[tuple[int, float, float, float, bool, str]] = []
     best_bounce_frame: int | None = None
     if bounces_df is not None and not bounces_df.empty:
         k = max(1, int(bounce_topk))
@@ -117,10 +118,13 @@ def render_video(
             cx = float(bounce["cx"])
             cy = float(bounce["cy"])
             score = float(bounce["bounce_score"])
+            btype = str(bounce.get("type", "candidate"))
             selected = bool(bounce["selected"]) if "selected" in bounces_df.columns else score >= 0.2
-            bounce_top_candidates.append((frame_bounce, cx, cy, score, selected))
-            bounce_by_frame[frame_bounce] = (cx, cy, score, selected)
-        if bounce_top_candidates:
+            bounce_top_candidates.append((frame_bounce, cx, cy, score, selected, btype))
+            bounce_by_frame[frame_bounce] = (cx, cy, score, selected, btype)
+        if bounce_best is not None and "frame" in bounce_best:
+            best_bounce_frame = int(bounce_best["frame"])
+        elif bounce_top_candidates:
             best_bounce_frame = bounce_top_candidates[0][0]
 
     hit_by_frame: dict[int, tuple[float, float, float]] = {}
@@ -217,21 +221,26 @@ def render_video(
                     )
                     log_line += f" 🔵 Hit ({hscore:.2f})"
 
-        for cand_idx, (bframe, bx, by, bscore, selected) in enumerate(bounce_top_candidates, start=1):
+        for cand_idx, (bframe, bx, by, bscore, selected, btype) in enumerate(bounce_top_candidates, start=1):
             if not (np.isfinite(bx) and np.isfinite(by)):
                 continue
             ix, iy = int(round(bx)), int(round(by))
             if not (0 <= ix < frame_width and 0 <= iy < frame_height):
                 continue
             color = (0, 165, 255) if selected else (90, 90, 255)
-            radius = 18 if bframe == best_bounce_frame else 10
-            thickness = 3 if bframe == frame_id else 1
+            is_best = bframe == best_bounce_frame
+            radius = 20 if is_best else 10
+            near_frame = abs(frame_id - bframe) <= 1
+            thickness = 4 if (is_best and near_frame) else (2 if near_frame else 1)
             cv2.circle(frame, (ix, iy), radius, color, thickness)
-            cv2.putText(frame, f"B{cand_idx}:{bscore:.2f}", (ix + 8, max(20, iy - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+            if near_frame:
+                label = f"Bounce({btype}) score={bscore:.2f}"
+                cv2.putText(frame, label, (ix + 8, max(20, iy - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+                cv2.putText(frame, f"B{cand_idx}", (ix - 6, iy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
         if frame_id in bounce_by_frame:
-            bx, by, bscore, _ = bounce_by_frame[frame_id]
-            log_line += f" 🟠 Bounce ({bscore:.2f})"
+            bx, by, bscore, _, btype = bounce_by_frame[frame_id]
+            log_line += f" 🟠 Bounce {btype} ({bscore:.2f})"
 
         print(log_line)
         out.write(frame)

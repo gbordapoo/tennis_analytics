@@ -1,24 +1,11 @@
-
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
 
 
-def _clamp01(values: np.ndarray) -> np.ndarray:
-    return np.clip(values, 0.0, 1.0)
-
-
-def _min_distance_to_frames(frames: np.ndarray, ref_frames: np.ndarray) -> np.ndarray:
-    if frames.size == 0 or ref_frames.size == 0:
-        return np.full(frames.shape, np.inf, dtype=np.float64)
-    ref_frames = np.sort(ref_frames.astype(np.int64))
-    idx = np.searchsorted(ref_frames, frames, side="left")
-    left_idx = np.clip(idx - 1, 0, len(ref_frames) - 1)
-    right_idx = np.clip(idx, 0, len(ref_frames) - 1)
-    left_dist = np.abs(frames - ref_frames[left_idx])
-    right_dist = np.abs(frames - ref_frames[right_idx])
-    return np.minimum(left_dist, right_dist).astype(np.float64)
+def _clamp01(value: float) -> float:
+    return float(np.clip(value, 0.0, 1.0))
 
 
 def detect_bounces(
@@ -37,15 +24,19 @@ def detect_bounces(
     local_window: int = 3,
     max_gap_to_raw: int = 20,
     raw_detected_frames: list[int] | None = None,
+    top_k: int = 8,
 ) -> pd.DataFrame:
-    """Detect bounce candidates from interpolated trajectory with reliability filters.
+    """Detect bounce candidates using robust vertical flip/impact signals.
 
-    Returns all scored candidates (not just threshold-passing rows) so debugging can
-    tune thresholds post-run. Rows include extra debug columns used by overlays.
+    The detector keeps candidates for debugging (top-K sorted by score) even when no
+    row passes score threshold.
     """
     _ = fps
+    _ = smooth_window
+    _ = max_gap_to_raw
+    _ = raw_detected_frames
 
-    required_cols = {"frame", "cx", "cy", "vy", "speed"}
+    required_cols = {"frame", "cx", "cy", "speed"}
     missing = required_cols - set(df.columns)
     if missing:
         raise ValueError(f"Missing required columns: {sorted(missing)}")
@@ -55,100 +46,114 @@ def detect_bounces(
         "cx",
         "cy",
         "bounce_score",
+        "type",
+        "vy_prev",
+        "vy",
+        "ay",
+        "speed",
+        "cy_zone",
+        "extrapolated",
         "passes_threshold",
         "selected",
-        "vy_pre",
-        "vy_post",
-        "cy_drop",
-        "cy_rise",
-        "is_extrapolated",
-        "speed",
     ]
 
     if df.empty:
         return pd.DataFrame(columns=out_cols)
 
     series = df.copy()
-    for col in ["frame", "cx", "cy", "vy", "speed"]:
-        series[col] = pd.to_numeric(series[col], errors="coerce")
+    series["frame"] = pd.to_numeric(series["frame"], errors="coerce")
+    series["cx"] = pd.to_numeric(series["cx"], errors="coerce")
+    series["cy"] = pd.to_numeric(series["cy"], errors="coerce")
+    series["speed"] = pd.to_numeric(series["speed"], errors="coerce")
+    if "vy" in series.columns:
+        series["vy"] = pd.to_numeric(series["vy"], errors="coerce")
+    else:
+        series["vy"] = np.nan
+
     if "extrapolated" not in series.columns:
         series["extrapolated"] = False
 
-    series = series.dropna(subset=["frame", "cx", "cy", "vy", "speed"]).sort_values("frame").reset_index(drop=True)
-    if len(series) < 3:
+    series = series.dropna(subset=["frame", "cx", "cy", "speed"]).sort_values("frame")
+    series = series.drop_duplicates(subset=["frame"], keep="first").reset_index(drop=True)
+    if len(series) < 4:
         return pd.DataFrame(columns=out_cols)
 
-    smooth_window = max(3, int(smooth_window))
-    if smooth_window % 2 == 0:
-        smooth_window += 1
+    # Robust derivatives from cy. Prefer this over raw vy to avoid inconsistent values.
+    vy_from_cy = series["cy"].diff().fillna(0.0)
+    vy = vy_from_cy.where(vy_from_cy.notna(), series["vy"]).astype(float)
+    ay = vy.diff().fillna(0.0).astype(float)
 
+    series["vy_calc"] = vy
+    series["ay_calc"] = ay
+
+    extrap = series["extrapolated"].fillna(False).astype(bool)
+    speed = series["speed"].astype(float)
+    reliable_mask = (~extrap) & np.isfinite(speed) & (speed >= float(speed_min))
+
+    reliable_cy = series.loc[reliable_mask, "cy"].astype(float)
+    if reliable_cy.empty:
+        return pd.DataFrame(columns=out_cols)
+
+    p30 = float(np.percentile(reliable_cy, 30))
+    p70 = float(np.percentile(reliable_cy, 70))
+
+    def _zone(cy: float) -> str:
+        if cy < p30:
+            return "far"
+        if cy > p70:
+            return "near"
+        return "mid"
+
+    eps = max(1.5, float(dy_threshold_px))
+    ay_thr = 12.0
     local_window = max(2, int(local_window))
-    cy_smooth = series["cy"].rolling(window=smooth_window, center=True, min_periods=1).mean().ffill().bfill()
-    vy_smooth = series["vy"].rolling(window=smooth_window, center=True, min_periods=1).mean().ffill().bfill()
 
-    is_extrap = series["extrapolated"].fillna(False).astype(bool).to_numpy()
-    speed = series["speed"].to_numpy(dtype=np.float64)
-    frame_vals = series["frame"].to_numpy(dtype=np.int64)
-
-    reliable_mask = (~is_extrap) & np.isfinite(speed) & (speed >= float(speed_min))
-    if raw_detected_frames:
-        raw_frames = np.array(sorted({int(f) for f in raw_detected_frames}), dtype=np.int64)
-        dist_raw = _min_distance_to_frames(frame_vals, raw_frames)
-        reliable_mask &= dist_raw <= int(max_gap_to_raw)
-
-    if int(reliable_mask.sum()) < 6:
-        print("⚠️ Bounce detection skipped: too few reliable trajectory frames after filtering.")
-        return pd.DataFrame(columns=out_cols)
-
-    cy_vals = cy_smooth.to_numpy(dtype=np.float64)
-    vy_vals = vy_smooth.to_numpy(dtype=np.float64)
-
-    candidate_rows: list[dict[str, float | int | bool]] = []
-    for idx in range(local_window, len(series) - local_window):
-        if not reliable_mask[idx]:
+    candidate_rows: list[dict[str, float | int | str | bool]] = []
+    for idx in range(1, len(series) - 1):
+        if not bool(reliable_mask.iloc[idx]):
             continue
 
-        local = cy_vals[idx - local_window : idx + local_window + 1]
-        if cy_vals[idx] > np.nanmin(local):
+        vy_prev = float(vy.iloc[idx - 1])
+        vy_now = float(vy.iloc[idx])
+        ay_now = float(ay.iloc[idx])
+        cy_now = float(series.loc[idx, "cy"])
+        frame_now = int(series.loc[idx, "frame"])
+
+        flip = vy_prev > eps and vy_now < -eps
+        impact = ay_now < -ay_thr and abs(vy_now) < abs(vy_prev) * 0.4
+        if not (flip or impact):
             continue
 
-        pre_slice = slice(idx - local_window, idx)
-        post_slice = slice(idx + 1, idx + local_window + 1)
+        left = max(0, idx - local_window)
+        right = min(len(series) - 1, idx + local_window)
+        pre_max = float(series.loc[left:idx, "cy"].max())
+        post_max = float(series.loc[idx:right, "cy"].max())
+        cy_drop = pre_max - cy_now
+        cy_rise = post_max - cy_now
 
-        vy_pre = float(np.nanmean(vy_vals[pre_slice]))
-        vy_post = float(np.nanmean(vy_vals[post_slice]))
-        if not (np.isfinite(vy_pre) and np.isfinite(vy_post)):
-            continue
-        if not (vy_pre < -abs(float(dy_threshold_px)) and vy_post > abs(float(dy_threshold_px))):
-            continue
+        cy_zone = _zone(cy_now)
+        zone_bonus = 0.08 if cy_zone in {"near", "far"} else 0.0
+        drop_bonus = 0.15 * _clamp01(min(cy_drop, cy_rise) / max(float(min_drop_px), 1e-6))
+        speed_score = _clamp01(float(series.loc[idx, "speed"]) / max(float(speed_min), 1e-6))
+        ay_score = _clamp01((-ay_now) / ay_thr)
 
-        pre_max = float(np.nanmax(cy_vals[pre_slice]))
-        post_max = float(np.nanmax(cy_vals[post_slice]))
-        cy_drop = pre_max - float(cy_vals[idx])
-        cy_rise = post_max - float(cy_vals[idx])
-
-        if cy_drop < float(min_drop_px) or cy_rise < float(min_drop_px):
-            continue
-
-        score_drop = min(cy_drop / max(float(min_drop_px), 1e-6), 3.0) / 3.0
-        score_rise = min(cy_rise / max(float(min_drop_px), 1e-6), 3.0) / 3.0
-        score_sign = _clamp01(np.array([(-vy_pre + vy_post) / max(2.0 * abs(float(dy_threshold_px)), 1e-6)]))[0]
-        score_speed = _clamp01(np.array([speed[idx] / max(float(speed_min), 1e-6)]))[0]
-        bounce_score = float(0.35 * score_drop + 0.35 * score_rise + 0.2 * score_sign + 0.1 * score_speed)
+        flip_score = 0.55 if flip else 0.0
+        impact_score = 0.45 if impact else 0.0
+        bounce_score = float(min(1.5, flip_score + impact_score + 0.2 * ay_score + 0.1 * speed_score + zone_bonus + drop_bonus))
 
         candidate_rows.append(
             {
-                "row_idx": idx,
-                "frame_bounce": int(frame_vals[idx]),
+                "frame_bounce": frame_now,
                 "cx": float(series.loc[idx, "cx"]),
-                "cy": float(series.loc[idx, "cy"]),
+                "cy": cy_now,
                 "bounce_score": bounce_score,
-                "vy_pre": vy_pre,
-                "vy_post": vy_post,
-                "cy_drop": cy_drop,
-                "cy_rise": cy_rise,
-                "is_extrapolated": bool(is_extrap[idx]),
-                "speed": float(speed[idx]),
+                "type": "flip" if flip else "impact",
+                "vy_prev": vy_prev,
+                "vy": vy_now,
+                "ay": ay_now,
+                "speed": float(series.loc[idx, "speed"]),
+                "cy_zone": cy_zone,
+                "extrapolated": bool(extrap.iloc[idx]),
             }
         )
 
@@ -161,29 +166,25 @@ def detect_bounces(
         candidate_df = candidate_df[~candidate_df["frame_bounce"].astype(int).isin(exclude_frames)].copy()
 
     if hit_frames:
-        exclude_ranges = [
-            (int(hit) - int(exclude_pre_hit), int(hit) + int(exclude_post_hit))
-            for hit in hit_frames
-        ]
+        hit_ranges = [(int(h) - int(exclude_pre_hit), int(h) + int(exclude_post_hit)) for h in hit_frames]
         candidate_df = candidate_df[
-            ~candidate_df["frame_bounce"].astype(int).apply(
-                lambda frame: any(start <= frame <= end for start, end in exclude_ranges)
-            )
+            ~candidate_df["frame_bounce"].astype(int).apply(lambda f: any(lo <= f <= hi for lo, hi in hit_ranges))
         ].copy()
 
     if candidate_df.empty:
         return pd.DataFrame(columns=out_cols)
 
-    candidate_df = candidate_df.sort_values("bounce_score", ascending=False).reset_index(drop=True)
+    candidate_df = candidate_df.sort_values("bounce_score", ascending=False).drop_duplicates(subset=["frame_bounce"], keep="first")
+    candidate_df = candidate_df.head(max(1, int(top_k))).reset_index(drop=True)
+
     candidate_df["passes_threshold"] = candidate_df["bounce_score"] >= float(score_threshold)
     candidate_df["selected"] = False
 
     selected_frames: list[int] = []
     for ridx, row in candidate_df.iterrows():
         frame_val = int(row["frame_bounce"])
-        if not selected_frames or min(abs(frame_val - f) for f in selected_frames) >= int(min_frames_between):
-            if bool(row["passes_threshold"]):
-                candidate_df.loc[ridx, "selected"] = True
-                selected_frames.append(frame_val)
+        if row["passes_threshold"] and (not selected_frames or min(abs(frame_val - sf) for sf in selected_frames) >= int(min_frames_between)):
+            candidate_df.loc[ridx, "selected"] = True
+            selected_frames.append(frame_val)
 
-    return candidate_df[out_cols].reset_index(drop=True)
+    return candidate_df[out_cols]
