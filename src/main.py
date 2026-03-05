@@ -3,41 +3,45 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+import cv2
 import torch
+
+from analytics.assign_players import assign_near_far_players
+from court.keypoints import load_keypoints_model, predict_court_keypoints
+from detection.ball import BallDetector
+from detection.players import PlayerDetector
+from tracking.ball_track import SimpleBallTracker, SimpleCentroidTracker
+from viz.render import render_frame
 
 
 def _resolve_path(path_str: str, project_root: Path, script_dir: Path) -> Path:
     path = Path(path_str).expanduser()
     if path.is_absolute():
         return path.resolve()
-    project_candidate = (project_root / path).resolve()
-    if project_candidate.exists():
-        return project_candidate
-    script_candidate = (script_dir / path).resolve()
-    if script_candidate.exists():
-        return script_candidate
-    return project_candidate
+    p1 = (project_root / path).resolve()
+    if p1.exists():
+        return p1
+    p2 = (script_dir / path).resolve()
+    if p2.exists():
+        return p2
+    return p1
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Modular tennis analytics pipeline")
-    parser.add_argument("--video", type=str, required=True)
-    parser.add_argument("--ball-model", type=str, default="models/yolo5_last.pt")
-    parser.add_argument("--court-model", type=str, default="models/keypoints_model.pth")
-    parser.add_argument("--player-model", type=str, default="models/yolov8n.pt")
-    parser.add_argument("--output", type=str, default="outputs/run1.mp4")
+    p = argparse.ArgumentParser(description="Modular tennis analytics pipeline")
+    p.add_argument("--video", required=True)
+    p.add_argument("--ball-model", default="models/yolo5_last.pt")
+    p.add_argument("--court-model", default="models/keypoints_model.pth")
+    p.add_argument("--player-model", default="models/yolov8n.pt")
+    p.add_argument("--output", default="outputs/run1.mp4")
+    p.add_argument("--player-every", type=int, default=2)
+    p.add_argument("--debug-court", default=None)
+    p.add_argument("--debug-frame", type=int, default=0)
 
-    parser.add_argument("--court-frames", type=int, default=30)
-    parser.add_argument("--court-refresh-every", type=int, default=0)
-    parser.add_argument("--court-ema-alpha", type=float, default=0.2)
-    parser.add_argument("--court-refine-geometry", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--no-players", action="store_true")
-    parser.add_argument("--no-court", action="store_true")
-    parser.add_argument("--debug", action="store_true")
-
-    parser.add_argument("--model", type=str, default=None, help=argparse.SUPPRESS)
-    parser.add_argument("--outdir", type=str, default=None, help=argparse.SUPPRESS)
-    return parser.parse_args()
+    # compatibility aliases
+    p.add_argument("--model", default=None, help=argparse.SUPPRESS)
+    p.add_argument("--outdir", default=None, help=argparse.SUPPRESS)
+    return p.parse_args()
 
 
 def _choose_device() -> str:
@@ -48,69 +52,25 @@ def _choose_device() -> str:
     return "cpu"
 
 
-def _doctor_check(video_path: Path, ball_model: Path, court_model: Path, player_model: Path, no_players: bool, no_court: bool, device: str) -> None:
-    required = [video_path, ball_model]
-    if not no_court:
-        required.append(court_model)
-    if not no_players:
-        required.append(player_model)
-    missing = [str(p) for p in required if not p.exists()]
-    if missing:
-        raise FileNotFoundError("Missing required local files:\n" + "\n".join(missing))
-    print(f"[doctor] device={device}")
-
-
 def main() -> None:
     args = parse_args()
-
-    import cv2
-
-    from analytics.assign import assign_near_far_players
-    from court.geometry import refine_keypoints
-    from court.infer import infer_output_domain, predict_keypoints, preprocess
-    from court.model import load_keypoints_model
-    from court.stabilize import ema_update, estimate_stable_keypoints
-    from detection.ball import BallDetector
-    from detection.players import PlayerDetector
-    from tracking.ball_track import SimpleBallTracker
-    from viz.draw import draw_ball, draw_keypoints, draw_players
-
     script_dir = Path(__file__).resolve().parent
-    project_root = script_dir.parent
+    root = script_dir.parent
 
     ball_model = args.model or args.ball_model
-    output = args.output
-    if args.outdir:
-        output = str(Path(args.outdir) / "output_ultralytics.mp4")
+    output = args.output if args.outdir is None else str(Path(args.outdir) / "output_ultralytics.mp4")
 
-    video_path = _resolve_path(args.video, project_root, script_dir)
-    ball_model_path = _resolve_path(ball_model, project_root, script_dir)
-    court_model_path = _resolve_path(args.court_model, project_root, script_dir)
-    player_model_path = _resolve_path(args.player_model, project_root, script_dir)
-    output_path = _resolve_path(output, project_root, script_dir)
+    video_path = _resolve_path(args.video, root, script_dir)
+    ball_model_path = _resolve_path(ball_model, root, script_dir)
+    court_model_path = _resolve_path(args.court_model, root, script_dir)
+    player_model_path = _resolve_path(args.player_model, root, script_dir)
+    output_path = _resolve_path(output, root, script_dir)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     device = _choose_device()
-    _doctor_check(video_path, ball_model_path, court_model_path, player_model_path, args.no_players, args.no_court, device)
-
+    court_model = load_keypoints_model(str(court_model_path), device=device)
     ball_detector = BallDetector(str(ball_model_path))
-    player_detector = None if args.no_players else PlayerDetector(str(player_model_path))
-    tracker = SimpleBallTracker()
-
-    court_model = None
-    stable_kpts = None
-    if not args.no_court:
-        court_model = load_keypoints_model(str(court_model_path), device=device, num_keypoints=14)
-        stable_kpts = estimate_stable_keypoints(str(video_path), court_model, device, num_frames=args.court_frames)
-        if args.court_refine_geometry:
-            stable_kpts = refine_keypoints(stable_kpts)
-
-        cap_probe = cv2.VideoCapture(str(video_path))
-        ok, probe_frame = cap_probe.read()
-        cap_probe.release()
-        if ok:
-            raw = court_model(preprocess(probe_frame).to(device)).detach().cpu().numpy().reshape(-1, 2)
-            print(f"[doctor] court output domain heuristic={infer_output_domain(raw)}")
+    player_detector = PlayerDetector(str(player_model_path))
 
     cap = cv2.VideoCapture(str(video_path))
     if not cap.isOpened():
@@ -121,43 +81,43 @@ def main() -> None:
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     writer = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), float(fps), (width, height))
 
-    frame_id = 0
+    ball_tracker = SimpleBallTracker()
+    player_tracker = SimpleCentroidTracker()
+
+    cached_players = []
+    cached_kps = None
+    frame_idx = 0
+
     while True:
         ok, frame = cap.read()
         if not ok:
             break
 
+        kps = predict_court_keypoints(court_model, frame, previous_keypoints=cached_kps)
+        cached_kps = kps
+
+        if args.debug_court and frame_idx == args.debug_frame:
+            debug_img = render_frame(frame, kps, None, None, None)
+            debug_path = _resolve_path(args.debug_court, root, script_dir)
+            debug_path.parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(debug_path), debug_img)
+
+        if frame_idx % max(1, args.player_every) == 0:
+            cached_players = player_detector.detect(frame)
+        player_tracker.update(cached_players)
+
+        near_player, far_player = assign_near_far_players(cached_players, kps)
+
         balls = ball_detector.detect(frame)
-        _ = tracker.update(balls)
+        ball_center = ball_tracker.update(balls)
 
-        if (not args.no_court) and args.court_refresh_every > 0 and frame_id > 0 and frame_id % args.court_refresh_every == 0:
-            raw_kpts = predict_keypoints(court_model, frame, device)
-            if args.court_refine_geometry:
-                raw_kpts = refine_keypoints(raw_kpts)
-            stable_kpts = ema_update(stable_kpts, raw_kpts, alpha=args.court_ema_alpha)
-
-        near_player, far_player = None, None
-        if player_detector is not None:
-            players = player_detector.detect(frame)
-            if stable_kpts is not None:
-                near_player, far_player = assign_near_far_players(players, stable_kpts)
-
-        draw_ball(frame, balls)
-        draw_players(frame, near_player, far_player)
-        if stable_kpts is not None:
-            draw_keypoints(frame, stable_kpts)
-
-        if args.debug and frame_id == 0:
-            debug_path = output_path.parent / "debug_first_frame.png"
-            cv2.imwrite(str(debug_path), frame)
-            print(f"[debug] saved {debug_path}")
-
-        writer.write(frame)
-        frame_id += 1
+        out_frame = render_frame(frame, kps, near_player, far_player, ball_center)
+        writer.write(out_frame)
+        frame_idx += 1
 
     cap.release()
     writer.release()
-    print(f"✅ Output saved to: {output_path}")
+    print(f"Saved output video: {output_path}")
 
 
 if __name__ == "__main__":
