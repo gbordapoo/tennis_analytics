@@ -327,3 +327,10 @@ Visualization helpers now exposed in `src/viz/render.py`:
 - `draw_players`
 - `draw_ball`
 - `draw_keypoints`
+
+
+Court refinement CLI flags in `src/main.py`:
+- `--court-refine-lines` (default: `true`)
+- `--court-refine-homography` (default: `true`)
+- `--court-crop-size` (default: `40`)
+- `--court-max-shift-px` (default: `35`)

@@ -106,3 +106,10 @@ Primary CLI command:
 Backward compatibility:
 - `--model` still works as ball model alias.
 - `--outdir` still works and writes `output_ultralytics.mp4` under that directory.
+
+
+Court refinement flags (default-on for better keypoint accuracy):
+- `--court-refine-lines` (default: `true`) local CV line-intersection refinement per keypoint.
+- `--court-refine-homography` (default: `true`) RANSAC homography correction against canonical court points.
+- `--court-crop-size` (default: `40`) local crop size for line refinement.
+- `--court-max-shift-px` (default: `35`) replacement threshold for homography correction.

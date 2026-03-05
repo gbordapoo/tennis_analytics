@@ -14,6 +14,10 @@ from tracking.ball_track import SimpleBallTracker, SimpleCentroidTracker
 from viz.render import render_frame
 
 
+def _parse_bool(v: str) -> bool:
+    return str(v).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def _resolve_path(path_str: str, project_root: Path, script_dir: Path) -> Path:
     path = Path(path_str).expanduser()
     if path.is_absolute():
@@ -37,6 +41,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--player-every", type=int, default=2)
     p.add_argument("--debug-court", default=None)
     p.add_argument("--debug-frame", type=int, default=0)
+    p.add_argument("--court-refine-lines", type=_parse_bool, default=True)
+    p.add_argument("--court-refine-homography", type=_parse_bool, default=True)
+    p.add_argument("--court-crop-size", type=int, default=40)
+    p.add_argument("--court-max-shift-px", type=float, default=35)
 
     # compatibility aliases
     p.add_argument("--model", default=None, help=argparse.SUPPRESS)
@@ -68,7 +76,14 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     device = _choose_device()
-    court_detector = TennisCourtDetector(str(court_model_path), device=device)
+    court_detector = TennisCourtDetector(
+        str(court_model_path),
+        device=device,
+        refine_lines=args.court_refine_lines,
+        refine_homography=args.court_refine_homography,
+        crop_size=args.court_crop_size,
+        max_shift_px=args.court_max_shift_px,
+    )
     ball_detector = BallDetector(str(ball_model_path))
     player_detector = PlayerDetector(str(player_model_path))
 

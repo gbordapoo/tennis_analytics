@@ -188,3 +188,10 @@ Main CLI now favors:
 Compatibility aliases:
 - `--model` => `--ball-model`
 - `--outdir` => output directory for `output_ultralytics.mp4`
+
+
+Court keypoint postprocessing controls (in `src/main.py` and `scripts/debug_court.py`):
+- `--court-refine-lines` (default: `true`)
+- `--court-refine-homography` (default: `true`)
+- `--court-crop-size` (default: `40`)
+- `--court-max-shift-px` (default: `35`)
