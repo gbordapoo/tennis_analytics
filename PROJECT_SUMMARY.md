@@ -86,6 +86,7 @@ Video extension is not hardcoded; OpenCV `VideoCapture` is used. Existing comman
 
 
 - Court keypoints model path: `models/keypoints_model.pth` (loaded once on first frame and reused).
+- Player model path: `models/yolov8n.pt` by default via `--player-model` (local file to avoid implicit downloads).
 
 
 - Court keypoints overlay example:
@@ -100,7 +101,7 @@ The runtime pipeline has been simplified into four core modules:
 - `src/analytics/` (`event_detector.py`, `metrics.py`)
 
 Primary CLI command:
-`python src/main.py --video videos/federer_murray_trim.mp4 --ball-model models/yolo5_last.pt --court-model models/keypoints_model.pth --output outputs/run1.mp4`
+`python src/main.py --video videos/federer_murray_trim.mp4 --ball-model models/yolo5_last.pt --court-model models/keypoints_model.pth --player-model models/yolov8n.pt --output outputs/run1.mp4`
 
 Backward compatibility:
 - `--model` still works as ball model alias.
