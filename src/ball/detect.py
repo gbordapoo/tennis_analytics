@@ -73,4 +73,13 @@ def run_detection(model: YOLO, video_path: Path) -> tuple[list, pd.DataFrame, Vi
     cap.release()
 
     df_detecciones = pd.DataFrame(detecciones)
+    if not df_detecciones.empty:
+        # Keep the strongest ball detection per frame to avoid duplicate-frame
+        # trajectories downstream (breaks velocity/acceleration derivatives).
+        df_detecciones = (
+            df_detecciones.sort_values("confidence", ascending=False)
+            .drop_duplicates(subset=["frame"], keep="first")
+            .sort_values("frame")
+            .reset_index(drop=True)
+        )
     return frames_raw, df_detecciones, video_info

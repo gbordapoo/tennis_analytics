@@ -284,6 +284,7 @@ def main() -> None:
             ),
             exclude_post_hit=args.bounce_exclude_post_hit,
             exclude_pre_hit=args.bounce_exclude_pre_hit,
+            top_k=args.bounce_topk,
         )
         if args.detect_hits and df_hits is not None and not df_hits.empty:
             df_bounces = _filter_bounces_with_next_hit(
@@ -321,10 +322,32 @@ def main() -> None:
         except Exception as exc:
             print(f"⚠️ Error en calibración de cancha: {exc}")
 
+
+    bounce_best_payload = None
+    if args.detect_bounces and df_bounces is not None and not df_bounces.empty:
+        passing_pool = df_bounces[df_bounces["passes_threshold"]] if "passes_threshold" in df_bounces.columns else df_bounces
+        if not passing_pool.empty:
+            best_row = passing_pool.sort_values("bounce_score", ascending=False).iloc[0]
+            bounce_best_payload = {
+                "frame": int(best_row["frame_bounce"]),
+                "cx": float(best_row["cx"]),
+                "cy": float(best_row["cy"]),
+                "bounce_score": float(best_row["bounce_score"]),
+            }
+        else:
+            best_row = df_bounces.sort_values("bounce_score", ascending=False).iloc[0]
+            bounce_best_payload = {
+                "frame": int(best_row["frame_bounce"]),
+                "cx": float(best_row["cx"]),
+                "cy": float(best_row["cy"]),
+                "bounce_score": float(best_row["bounce_score"]),
+            }
+
     render_kwargs = {}
     if args.detect_bounces and args.bounce_visuals:
         render_kwargs["bounces_df"] = df_bounces
         render_kwargs["bounce_topk"] = args.bounce_topk
+        render_kwargs["bounce_best"] = bounce_best_payload
     if args.detect_hits and args.hit_visuals:
         render_kwargs["hits_df"] = df_hits
     if args.draw_players and df_players is not None and not df_players.empty:
@@ -384,6 +407,7 @@ def main() -> None:
                 ),
                 exclude_post_hit=args.bounce_exclude_post_hit,
                 exclude_pre_hit=args.bounce_exclude_pre_hit,
+                top_k=args.bounce_topk,
             )
             if args.detect_hits and df_hits is not None and not df_hits.empty:
                 df_bounces = _filter_bounces_with_next_hit(
@@ -404,21 +428,24 @@ def main() -> None:
         if df_bounces.empty:
             print("⚠️ No se detectaron botes confiables.")
         else:
-            selected_pool = df_bounces[df_bounces.get("selected", False)] if "selected" in df_bounces.columns else df_bounces
-            best = selected_pool.iloc[0] if not selected_pool.empty else df_bounces.iloc[0]
-            payload = {
-                "frame": int(best["frame_bounce"]),
-                "cx": float(best["cx"]),
-                "cy": float(best["cy"]),
-                "bounce_score": float(best["bounce_score"]),
-            }
-            if "X_m" in df_bounces.columns and "Y_m" in df_bounces.columns:
-                payload["X_m"] = float(best["X_m"])
-                payload["Y_m"] = float(best["Y_m"])
+            passing_pool = df_bounces[df_bounces["passes_threshold"]] if "passes_threshold" in df_bounces.columns else df_bounces
+            if passing_pool.empty:
+                print("⚠️ No bounce candidate passed --bounce-score-threshold; keeping candidates in bounces.csv for debugging.")
+            else:
+                best = passing_pool.sort_values("bounce_score", ascending=False).iloc[0]
+                payload = {
+                    "frame": int(best["frame_bounce"]),
+                    "cx": float(best["cx"]),
+                    "cy": float(best["cy"]),
+                    "bounce_score": float(best["bounce_score"]),
+                }
+                if "X_m" in df_bounces.columns and "Y_m" in df_bounces.columns:
+                    payload["X_m"] = float(best["X_m"])
+                    payload["Y_m"] = float(best["Y_m"])
 
-            with output_bounce_best.open("w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
-            print(f"🥇 Mejor bote: {output_bounce_best}")
+                with output_bounce_best.open("w", encoding="utf-8") as f:
+                    json.dump(payload, f, ensure_ascii=False, indent=2)
+                print(f"🥇 Mejor bote: {output_bounce_best}")
 
 
 if __name__ == "__main__":
