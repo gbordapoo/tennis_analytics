@@ -94,9 +94,11 @@ def main() -> None:
             break
 
         if frame_idx == 0:
-            court_keypoints = court_detector.predict(frame)
+            court_keypoints = court_detector.detect(frame)
 
-        kps = court_keypoints
+        kps = None
+        if court_keypoints is not None and all(x is not None and y is not None for x, y in court_keypoints):
+            kps = court_keypoints
 
         if args.debug_court and frame_idx == args.debug_frame:
             debug_img = render_frame(frame, kps, None, None, None)
@@ -115,8 +117,7 @@ def main() -> None:
 
         out_frame = render_frame(frame, kps, near_player, far_player, ball_center)
         if court_keypoints is not None:
-            for (x, y) in court_keypoints:
-                cv2.circle(out_frame, (int(x), int(y)), 6, (0, 255, 255), -1)
+            out_frame = court_detector.draw(out_frame, court_keypoints)
         writer.write(out_frame)
         frame_idx += 1
 
