@@ -4,63 +4,51 @@ import cv2
 import numpy as np
 import torch
 
-from .postprocess import postprocess
 from .tracknet import BallTrackerNet
 
 
 class TennisCourtDetector:
-    def __init__(self, model_path: str, device: str = "cpu", input_size: tuple[int, int] = (640, 360)) -> None:
+    def __init__(self, model_path: str, device: str = "cpu") -> None:
         self.device = device
-        self.input_w, self.input_h = input_size
 
         self.model = BallTrackerNet(out_channels=15)
-        checkpoint = torch.load(model_path, map_location=device)
-        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-            checkpoint = checkpoint["state_dict"]
-
-        state_dict = {k.replace("module.", ""): v for k, v in checkpoint.items()}
-        self.model.load_state_dict(state_dict)
+        sd = torch.load(model_path, map_location=device)
+        if isinstance(sd, dict) and "state_dict" in sd:
+            sd = sd["state_dict"]
+        sd = {k.replace("module.", ""): v for k, v in sd.items()}
+        self.model.load_state_dict(sd, strict=True)
         self.model.to(device)
         self.model.eval()
 
-    def detect(self, frame_bgr: np.ndarray) -> list[tuple[float | None, float | None]]:
+    def predict(self, frame_bgr: np.ndarray) -> list[tuple[float, float]]:
         h_orig, w_orig = frame_bgr.shape[:2]
 
-        img = cv2.resize(frame_bgr, (self.input_w, self.input_h))
+        img = cv2.resize(frame_bgr, (640, 360))
         img = img.astype(np.float32) / 255.0
-        img = np.transpose(img, (2, 0, 1))
-
+        img = np.rollaxis(img, 2, 0)
         tensor = torch.from_numpy(img).unsqueeze(0).to(self.device)
 
         with torch.no_grad():
-            pred = self.model(tensor)[0]
-            pred = torch.sigmoid(pred)
+            out = self.model(tensor)
+            out = torch.sigmoid(out)
 
-        pred_np = pred.detach().cpu().numpy()
+        heatmaps = out[0].cpu().numpy()
 
-        keypoints: list[tuple[float | None, float | None]] = []
-        for kps_idx in range(14):
-            heatmap = (pred_np[kps_idx] * 255.0).astype(np.uint8)
-            x_r, y_r = postprocess(heatmap)
-
-            if x_r is None or y_r is None:
-                keypoints.append((None, None))
-                continue
-
-            x = float(x_r) * (float(w_orig) / float(self.input_w))
-            y = float(y_r) * (float(h_orig) / float(self.input_h))
-            keypoints.append((x, y))
+        keypoints: list[tuple[float, float]] = []
+        for i in range(14):
+            idx = heatmaps[i].argmax()
+            y, x = np.unravel_index(idx, heatmaps[i].shape)
+            x0 = float(x) * (float(w_orig) / 640.0)
+            y0 = float(y) * (float(h_orig) / 360.0)
+            keypoints.append((x0, y0))
 
         return keypoints
 
-    def predict(self, frame_bgr: np.ndarray) -> list[tuple[float | None, float | None]]:
-        """Backward-compatible alias."""
-        return self.detect(frame_bgr)
+    def detect(self, frame_bgr: np.ndarray) -> list[tuple[float, float]]:
+        return self.predict(frame_bgr)
 
-    def draw(self, frame_bgr: np.ndarray, points: list[tuple[float | None, float | None]]) -> np.ndarray:
+    def draw(self, frame_bgr: np.ndarray, points: list[tuple[float, float]]) -> np.ndarray:
         out = frame_bgr.copy()
         for x, y in points:
-            if x is None or y is None:
-                continue
             cv2.circle(out, (int(x), int(y)), 5, (0, 255, 255), -1)
         return out
