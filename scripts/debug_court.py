@@ -33,7 +33,7 @@ def main() -> None:
         raise RuntimeError(f"Unable to read first frame from {args.video}")
 
     detector = TennisCourtDetector(args.court_model, device=args.device)
-    points = detector.detect(frame)
+    points = detector.predict(frame)
 
     valid = [(x, y) for x, y in points if x is not None and y is not None]
     if valid:
