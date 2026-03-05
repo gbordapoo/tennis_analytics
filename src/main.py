@@ -7,7 +7,7 @@ import cv2
 import torch
 
 from analytics.assign_players import assign_near_far_players
-from court.keypoints import load_keypoints_model, predict_court_keypoints
+from court.court_detector import TennisCourtDetector
 from detection.ball import BallDetector
 from detection.players import PlayerDetector
 from tracking.ball_track import SimpleBallTracker, SimpleCentroidTracker
@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Modular tennis analytics pipeline")
     p.add_argument("--video", required=True)
     p.add_argument("--ball-model", default="models/yolo5_last.pt")
-    p.add_argument("--court-model", default="models/keypoints_model.pth")
+    p.add_argument("--court-model", default="models/model_tennis_court_det.pt")
     p.add_argument("--player-model", default="models/yolov8n.pt")
     p.add_argument("--output", default="outputs/run1.mp4")
     p.add_argument("--player-every", type=int, default=2)
@@ -68,7 +68,7 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     device = _choose_device()
-    court_model = load_keypoints_model(str(court_model_path), device=device)
+    court_detector = TennisCourtDetector(str(court_model_path), device=device)
     ball_detector = BallDetector(str(ball_model_path))
     player_detector = PlayerDetector(str(player_model_path))
 
@@ -85,7 +85,7 @@ def main() -> None:
     player_tracker = SimpleCentroidTracker()
 
     cached_players = []
-    cached_kps = None
+    court_keypoints = None
     frame_idx = 0
 
     while True:
@@ -93,8 +93,10 @@ def main() -> None:
         if not ok:
             break
 
-        kps = predict_court_keypoints(court_model, frame, previous_keypoints=cached_kps)
-        cached_kps = kps
+        if frame_idx == 0:
+            court_keypoints = court_detector.predict(frame)
+
+        kps = court_keypoints
 
         if args.debug_court and frame_idx == args.debug_frame:
             debug_img = render_frame(frame, kps, None, None, None)
@@ -112,6 +114,9 @@ def main() -> None:
         ball_center = ball_tracker.update(balls)
 
         out_frame = render_frame(frame, kps, near_player, far_player, ball_center)
+        if court_keypoints is not None:
+            for (x, y) in court_keypoints:
+                cv2.circle(out_frame, (int(x), int(y)), 6, (0, 255, 255), -1)
         writer.write(out_frame)
         frame_idx += 1
 
