@@ -253,6 +253,12 @@ Loaded by `load_manual_calibration(path)`:
 - `--hit-out` (default: `hits.csv`) hit CSV output path.
 - `--hit-visuals` (flag) draw hit markers.
 
+**Court keypoints**
+- `--court-keypoints` (flag) enable court keypoint inference stage.
+- `--court-keypoints-model` (default: `models/keypoints_model.pth`) path to court keypoints model.
+- `--court-keypoints-visuals` (flag) draw red keypoints labels + white wireframe.
+- `--court-keypoints-every` (default: `0`) recompute cadence; `0` means frame-1 inference cached across all frames.
+
 ### `python src/court/calibrate_click.py`
 - `--video` (required): input video.
 - `--output` (default: `calibration.json`): calibration JSON path.
@@ -304,3 +310,7 @@ Safe changes:
 
 
 - Court keypoints model path: `models/keypoints_model.pth` (loaded once on first frame and reused).
+
+
+- Court keypoints overlay example:
+  - `python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui --court-keypoints --court-keypoints-visuals`

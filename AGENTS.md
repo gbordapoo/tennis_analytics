@@ -11,7 +11,9 @@ Run from repo root.
 - No-GUI run:
   - `python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui`
 - Full-features run:
-  - `python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui --detect-players --detect-hits --hit-visuals --detect-bounces --bounce-visuals --auto-calibrate --calibration-visuals --bounce-speed-min 2.0 --bounce-min-drop-px 6.0 --player-min-conf 0.3
+  - `python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui --detect-players --detect-hits --hit-visuals --detect-bounces --bounce-visuals --auto-calibrate --calibration-visuals --bounce-speed-min 2.0 --bounce-min-drop-px 6.0 --player-min-conf 0.3 --court-keypoints --court-keypoints-visuals`
+- Court keypoints visuals run:
+  - `python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui --court-keypoints --court-keypoints-visuals`
 
 Useful tools:
 - Manual calibration: `python src/court/calibrate_click.py --video videos/federer_murray_trim.mp4 --output outputs/calibration.json`

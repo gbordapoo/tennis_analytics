@@ -11,6 +11,7 @@ This repository processes tennis match video using YOLO-based inference and rule
 - Bounce detection from vertical motion sign changes and scoring (`src/ball/bounce.py`).
 - Hit detection from trajectory angle change + player proximity (`src/ball/hit.py`).
 - Player detection with YOLO pose + near/far assignment + wrists (`src/player/pose.py`).
+- Court keypoint inference (optional, cached by default from frame 1) with wireframe visualization support (`src/court/keypoints.py`, `src/viz/render.py`).
 - Court calibration:
   - static auto-calibration from line heuristics (`src/court/auto_calibrate.py`)
   - manual calibration JSON loader + click tool (`src/court/homography.py`, `src/court/calibrate_click.py`)
@@ -39,6 +40,7 @@ Run from repo root.
 - Ball model weights (`--model`, default `models/yolo5_last.pt`).
 - Input video (`--video`, default `../videos/federer_murray_trim.mp4`).
 - Optional pose model (`--pose-model`, default `models/yolov8n-pose.pt`) for players/hits.
+- Optional court keypoints model (`--court-keypoints-model`, default `models/keypoints_model.pth`) for court wireframe overlays.
 - Optional manual calibration JSON (`--calibration`) for `--calibration-mode manual`.
 
 Video extension is not hardcoded; OpenCV `VideoCapture` is used. Existing commands and outputs assume MP4.
@@ -55,6 +57,7 @@ Video extension is not hardcoded; OpenCV `VideoCapture` is used. Existing comman
 - `grafico_angulo_por_frame.png`
 - `rosa_direcciones.png`
 - `court_overlay.png` (if calibration points available)
+- `court_keypoints_frame1.png` (if `--court-keypoints` is enabled)
 
 ## Repo layout (top-level)
 
@@ -83,3 +86,7 @@ Video extension is not hardcoded; OpenCV `VideoCapture` is used. Existing comman
 
 
 - Court keypoints model path: `models/keypoints_model.pth` (loaded once on first frame and reused).
+
+
+- Court keypoints overlay example:
+  - `python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui --court-keypoints --court-keypoints-visuals`

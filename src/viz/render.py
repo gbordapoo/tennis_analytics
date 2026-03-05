@@ -8,6 +8,45 @@ import numpy as np
 import pandas as pd
 
 
+COURT_LINES_14: list[tuple[int, int]] = [
+    (0, 1), (1, 2), (2, 3), (3, 0),
+    (4, 5), (5, 6), (6, 7), (7, 4),
+    (8, 9), (10, 11),
+    (12, 13),
+    (4, 8), (5, 9), (6, 10), (7, 11),
+]
+
+
+def _draw_court_keypoints_overlay(
+    frame: np.ndarray,
+    keypoints_xy: np.ndarray,
+    draw_lines: bool = True,
+) -> None:
+    pts = np.asarray(keypoints_xy, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] < 2:
+        return
+
+    if draw_lines and pts.shape[0] == 14:
+        for p0, p1 in COURT_LINES_14:
+            x0, y0 = pts[p0]
+            x1, y1 = pts[p1]
+            if np.isfinite([x0, y0, x1, y1]).all():
+                cv2.line(
+                    frame,
+                    (int(round(x0)), int(round(y0))),
+                    (int(round(x1)), int(round(y1))),
+                    (255, 255, 255),
+                    2,
+                )
+
+    for idx, (x, y) in enumerate(pts[:, :2]):
+        if not (np.isfinite(x) and np.isfinite(y)):
+            continue
+        ix, iy = int(round(x)), int(round(y))
+        cv2.circle(frame, (ix, iy), 4, (0, 0, 255), -1)
+        cv2.putText(frame, str(idx), (ix + 5, iy - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
+
+
 def _build_players_by_frame(df_players: pd.DataFrame | None) -> dict[int, dict[str, dict[str, float]]]:
     if df_players is None or df_players.empty:
         return {}
@@ -136,7 +175,8 @@ def render_video(
     bounce_best: dict[str, float | int] | None = None,
     draw_ball: bool = True,
     debug_players: bool = False,
-    court_keypoints: list[float] | None = None,
+    court_keypoints: dict[int, np.ndarray] | None = None,
+    draw_court_keypoints: bool = False,
 ) -> None:
     out = cv2.VideoWriter(str(output_video), cv2.VideoWriter_fourcc(*"mp4v"), float(fps), (frame_width, frame_height))
     print("\n🎬 Renderizando video con interpolación y extrapolación...\n")
@@ -234,12 +274,21 @@ def render_video(
                     cv2.polylines(frame, [near_poly], True, (255, 0, 255), 2)
 
 
-        if court_keypoints is not None:
-            kps = [(court_keypoints[j], court_keypoints[j + 1]) for j in range(0, min(len(court_keypoints), 28), 2)]
-            for k_idx, (kx, ky) in enumerate(kps):
-                if np.isfinite(kx) and np.isfinite(ky):
-                    cv2.circle(frame, (int(round(kx)), int(round(ky))), 4, (50, 255, 50), -1)
-                    cv2.putText(frame, str(k_idx), (int(round(kx)) + 4, int(round(ky)) - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (50, 255, 50), 1)
+        if draw_court_keypoints and court_keypoints:
+            frame_candidates = [f for f in court_keypoints.keys() if f <= frame_id]
+            if frame_candidates:
+                latest_court_keypoints = np.asarray(court_keypoints[max(frame_candidates)], dtype=np.float32)
+            if latest_court_keypoints is not None:
+                if latest_court_keypoints.shape[0] != 14 and not court_keypoints_warned:
+                    print(
+                        f"⚠️ court keypoints overlay expected K=14 for wireframe lines but received K={latest_court_keypoints.shape[0]}; drawing points only."
+                    )
+                    court_keypoints_warned = True
+                _draw_court_keypoints_overlay(
+                    frame,
+                    latest_court_keypoints,
+                    draw_lines=latest_court_keypoints.shape[0] == 14,
+                )
 
         if calibration_poly is not None:
             cv2.polylines(frame, [calibration_poly], True, (0, 255, 255), 2)
