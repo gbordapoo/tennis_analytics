@@ -1,3 +1,3 @@
-from .draw import draw_ball, draw_keypoints, draw_players
+from .render import render_frame
 
-__all__ = ["draw_ball", "draw_keypoints", "draw_players"]
+__all__ = ["render_frame"]
