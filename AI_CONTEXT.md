@@ -99,6 +99,10 @@ python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_tr
   - `--player-min-conf` (0.3)
 - Hits:
   - `--detect-hits`, `--hit-out` (`hits.csv`), `--hit-visuals`
+- Court keypoints:
+  - `--court-keypoints`, `--court-keypoints-visuals`
+  - `--court-keypoints-model` (`models/keypoints_model.pth`)
+  - `--court-keypoints-every` (`0` means infer once on frame 1 and reuse)
 
 ## 5) Key modules and ownership
 
@@ -125,6 +129,7 @@ python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_tr
 - `bounces.csv`, `bounce_best.json` (if bounces)
 - `grafico_angulo_por_frame.png`, `rosa_direcciones.png`
 - `court_overlay.png` (if calibration overlay available)
+- `court_keypoints_frame1.png` (if `--court-keypoints`)
 
 ### Important DataFrame schemas
 - Ball raw: `frame,x1,y1,x2,y2,confidence`
@@ -164,3 +169,7 @@ python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_tr
 
 
 - Court keypoints model path: `models/keypoints_model.pth` (loaded once on first frame and reused).
+
+
+- Court keypoints overlay example:
+  - `python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui --court-keypoints --court-keypoints-visuals`

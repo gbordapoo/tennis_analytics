@@ -1,23 +1,11 @@
 from __future__ import annotations
 
 import argparse
+
+import numpy as np
 import json
 from pathlib import Path
 
-from ball.bounce import detect_bounces
-from ball.detect import load_model, run_detection
-from ball.hit import detect_hits
-from ball.track import interpolar_detecciones
-from court.auto_calibrate import draw_court_overlay, run_static_auto_calibration
-from court.keypoints import load_keypoints_model, predict_court_keypoints
-from court.homography import (
-    apply_homography,
-    compute_homography,
-    load_manual_calibration,
-    project_points_to_meters,
-)
-from player.pose import detect_players, ensure_pose_model
-from viz.render import render_video, save_direction_plots
 
 
 def _ensure_file(path: Path, label: str) -> None:
@@ -61,6 +49,8 @@ def _build_player_selection_cfg(args: argparse.Namespace, project_root: Path, sc
         return cfg
 
     try:
+        from court.homography import load_manual_calibration
+
         pixel_points, _ = load_manual_calibration(calibration_path)
         cfg["calibration_far_left_x"] = float(pixel_points[2][0])
         cfg["calibration_far_right_x"] = float(pixel_points[3][0])
@@ -197,6 +187,24 @@ def parse_args() -> argparse.Namespace:
         default=15,
         help="Maximum allowed frame gap between bounce and its next hit",
     )
+    parser.add_argument("--court-keypoints", action="store_true", help="Enable court keypoint inference")
+    parser.add_argument(
+        "--court-keypoints-model",
+        type=str,
+        default="models/keypoints_model.pth",
+        help="Path to court keypoints model",
+    )
+    parser.add_argument(
+        "--court-keypoints-visuals",
+        action="store_true",
+        help="Render court keypoints and wireframe lines on output video",
+    )
+    parser.add_argument(
+        "--court-keypoints-every",
+        type=int,
+        default=0,
+        help="Recompute court keypoints every N frames (0 means infer once on frame 1 and reuse)",
+    )
     parser.add_argument("--debug-players", action="store_true", help="Draw and log selected near/far players")
     parser.add_argument("--debug-court", action="store_true", help="Draw detected court keypoints (14 points)")
     parser.add_argument("--debug-ball", action="store_true", help="Draw per-frame ball detection boxes")
@@ -205,6 +213,21 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+
+    from ball.bounce import detect_bounces
+    from ball.detect import load_model, run_detection
+    from ball.hit import detect_hits
+    from ball.track import interpolar_detecciones
+    from court.auto_calibrate import draw_court_overlay, run_static_auto_calibration
+    from court.homography import (
+        apply_homography,
+        compute_homography,
+        load_manual_calibration,
+        project_points_to_meters,
+    )
+    from court.keypoints import load_keypoints_model, predict_court_keypoints
+    from player.pose import detect_players, ensure_pose_model
+    from viz.render import render_video, save_direction_plots
 
     # Make paths robust regardless of where you run from
     script_dir = Path(__file__).resolve().parent
@@ -217,12 +240,14 @@ def main() -> None:
     video_path = _resolve_path(args.video, project_root, script_dir)
     outdir = _resolve_path(args.outdir, project_root, script_dir)
     pose_model_path = _resolve_path(args.pose_model, project_root, script_dir)
-    keypoints_model_path = _resolve_path("models/keypoints_model.pth", project_root, script_dir)
+    keypoints_model_path = _resolve_path(args.court_keypoints_model, project_root, script_dir)
 
     outdir.mkdir(parents=True, exist_ok=True)
 
     _ensure_file(model_path, "Model file")
     _ensure_file(video_path, "Video file")
+    if args.court_keypoints:
+        _ensure_file(keypoints_model_path, "Court keypoints model file")
 
     output_video = outdir / "output_ultralytics.mp4"
     output_csv = outdir / "detecciones_ultralytics.csv"
@@ -243,14 +268,35 @@ def main() -> None:
     model = load_model(model_path)
     frames_raw, df_detecciones, video_info = run_detection(model, video_path)
 
-    court_kps: list[float] | None = None
-    if frames_raw:
+    court_keypoints_by_frame: dict[int, np.ndarray] = {}
+    if args.court_keypoints and frames_raw:
         try:
-            kp_model = load_keypoints_model(keypoints_model_path)
-            court_kps = predict_court_keypoints(frames_raw[0], kp_model)
-            player_selection_cfg["court_keypoints_14"] = court_kps
-            if args.debug_court:
-                print(f"[court] keypoints_14={court_kps}")
+            kp_model = load_keypoints_model(str(keypoints_model_path))
+            every_n = max(0, int(args.court_keypoints_every))
+            for frame_idx, frame in enumerate(frames_raw, start=1):
+                should_run = (frame_idx == 1) or (every_n > 0 and (frame_idx - 1) % every_n == 0)
+                if not should_run:
+                    continue
+                pred = predict_court_keypoints(kp_model, frame)
+                court_keypoints_by_frame[frame_idx] = pred
+
+            if 1 in court_keypoints_by_frame:
+                player_selection_cfg["court_keypoints_14"] = court_keypoints_by_frame[1].reshape(-1).tolist()
+                debug_frame = frames_raw[0].copy()
+                from viz.render import _draw_court_keypoints_overlay
+
+                _draw_court_keypoints_overlay(
+                    debug_frame,
+                    court_keypoints_by_frame[1],
+                    draw_lines=court_keypoints_by_frame[1].shape[0] == 14,
+                )
+                debug_path = outdir / "court_keypoints_frame1.png"
+                import cv2
+
+                cv2.imwrite(str(debug_path), debug_frame)
+                print(f"🎯 Court keypoints debug frame: {debug_path}")
+                if args.debug_court:
+                    print(f"[court] frame=1 keypoints={court_keypoints_by_frame[1].tolist()}")
         except Exception as exc:
             print(f"⚠️ Could not infer court keypoints: {exc}")
     df_detecciones.to_csv(output_csv, index=False)
@@ -386,8 +432,9 @@ def main() -> None:
     render_kwargs["draw_player_geometry"] = bool(args.player_geometry_visuals)
     render_kwargs["draw_ball"] = bool(args.debug_ball)
     render_kwargs["debug_players"] = bool(args.debug_players)
-    if args.debug_court and court_kps is not None:
-        render_kwargs["court_keypoints"] = court_kps
+    if args.court_keypoints and court_keypoints_by_frame:
+        render_kwargs["court_keypoints"] = court_keypoints_by_frame
+        render_kwargs["draw_court_keypoints"] = bool(args.court_keypoints_visuals or args.debug_court)
     if args.calibration_visuals and overlay_points is not None:
         render_kwargs["calibration_points"] = overlay_points
 
