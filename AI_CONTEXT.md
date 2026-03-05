@@ -183,7 +183,7 @@ Primary active modules:
 - Analytics: `src/analytics/event_detector.py`, `src/analytics/metrics.py`
 
 Main CLI now favors:
-`python src/main.py --video <video> --ball-model <ball_model> --court-model <court_model> --output <output_mp4>`
+`python src/main.py --video <video> --ball-model <ball_model> --court-model <court_model> --player-model <player_model> --output <output_mp4>`
 
 Compatibility aliases:
 - `--model` => `--ball-model`

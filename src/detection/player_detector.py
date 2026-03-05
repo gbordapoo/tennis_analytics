@@ -2,7 +2,7 @@ from ultralytics import YOLO
 
 
 class PlayerDetector:
-    def __init__(self, model: str = "yolov8n.pt") -> None:
+    def __init__(self, model: str = "models/yolov8n.pt") -> None:
         self.model = YOLO(model)
 
     def detect(self, frame):

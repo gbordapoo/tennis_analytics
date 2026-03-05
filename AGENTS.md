@@ -114,8 +114,9 @@ Minimum checks before opening a PR:
 - `src/analytics/` (events + metrics)
 
 Current primary CLI:
-- `python src/main.py --video videos/federer_murray_trim.mp4 --ball-model models/yolo5_last.pt --court-model models/keypoints_model.pth --output outputs/run1.mp4`
+- `python src/main.py --video videos/federer_murray_trim.mp4 --ball-model models/yolo5_last.pt --court-model models/keypoints_model.pth --player-model models/yolov8n.pt --output outputs/run1.mp4`
 
 Compatibility aliases are kept:
 - `--model` (alias of `--ball-model`)
 - `--outdir` (writes `<outdir>/output_ultralytics.mp4`)
+- `--player-model` defaults to `models/yolov8n.pt` and should point to a local file.

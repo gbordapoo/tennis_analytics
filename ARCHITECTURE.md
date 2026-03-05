@@ -318,8 +318,8 @@ Safe changes:
 ## 2026 modular architecture update
 
 Current orchestrator flow in `src/main.py`:
-1. Read `--video`, `--ball-model`, `--court-model`, `--output`.
-2. Initialize `PlayerDetector`, `BallDetector`, `CourtKeypointDetector`, `SimpleTracker`.
+1. Read `--video`, `--ball-model`, `--court-model`, `--player-model`, `--output`.
+2. Initialize `PlayerDetector` (from local `--player-model` path), `BallDetector`, `CourtKeypointDetector`, `SimpleTracker`.
 3. On first frame, infer court keypoints and create `CourtGeometry`.
 4. Per frame: detect players + ball, filter/assign near-far by court geometry, draw overlays, write output frame.
 
