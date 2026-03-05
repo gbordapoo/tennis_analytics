@@ -173,3 +173,18 @@ python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_tr
 
 - Court keypoints overlay example:
   - `python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui --court-keypoints --court-keypoints-visuals`
+
+## 2026 modular context update
+
+Primary active modules:
+- Detection: `src/detection/player_detector.py`, `src/detection/ball_detector.py`
+- Tracking: `src/tracking/object_tracker.py`
+- Court: `src/court/keypoint_detector.py`, `src/court/court_geometry.py`
+- Analytics: `src/analytics/event_detector.py`, `src/analytics/metrics.py`
+
+Main CLI now favors:
+`python src/main.py --video <video> --ball-model <ball_model> --court-model <court_model> --output <output_mp4>`
+
+Compatibility aliases:
+- `--model` => `--ball-model`
+- `--outdir` => output directory for `output_ultralytics.mp4`

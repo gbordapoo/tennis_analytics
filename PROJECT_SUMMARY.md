@@ -90,3 +90,18 @@ Video extension is not hardcoded; OpenCV `VideoCapture` is used. Existing comman
 
 - Court keypoints overlay example:
   - `python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui --court-keypoints --court-keypoints-visuals`
+
+## 2026 modular refactor update
+
+The runtime pipeline has been simplified into four core modules:
+- `src/detection/` (`player_detector.py`, `ball_detector.py`)
+- `src/tracking/` (`object_tracker.py`)
+- `src/court/` (`keypoint_detector.py`, `court_geometry.py`)
+- `src/analytics/` (`event_detector.py`, `metrics.py`)
+
+Primary CLI command:
+`python src/main.py --video videos/federer_murray_trim.mp4 --ball-model models/yolo5_last.pt --court-model models/keypoints_model.pth --output outputs/run1.mp4`
+
+Backward compatibility:
+- `--model` still works as ball model alias.
+- `--outdir` still works and writes `output_ultralytics.mp4` under that directory.

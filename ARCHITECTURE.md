@@ -314,3 +314,16 @@ Safe changes:
 
 - Court keypoints overlay example:
   - `python src/main.py --model models/yolo5_last.pt --video videos/federer_murray_trim.mp4 --outdir outputs --no-gui --court-keypoints --court-keypoints-visuals`
+
+## 2026 modular architecture update
+
+Current orchestrator flow in `src/main.py`:
+1. Read `--video`, `--ball-model`, `--court-model`, `--output`.
+2. Initialize `PlayerDetector`, `BallDetector`, `CourtKeypointDetector`, `SimpleTracker`.
+3. On first frame, infer court keypoints and create `CourtGeometry`.
+4. Per frame: detect players + ball, filter/assign near-far by court geometry, draw overlays, write output frame.
+
+Visualization helpers now exposed in `src/viz/render.py`:
+- `draw_players`
+- `draw_ball`
+- `draw_keypoints`
