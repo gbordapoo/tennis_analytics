@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import cv2
 import numpy as np
 import pandas as pd
 
@@ -16,6 +17,10 @@ def _bbox_center(person: dict[str, float]) -> tuple[float, float]:
 
 def _foot_point(person: dict[str, float]) -> tuple[float, float]:
     return (0.5 * (float(person["x1"]) + float(person["x2"])), float(person["y2"]))
+
+
+def foot_point(bbox: dict[str, float]) -> tuple[float, float]:
+    return _foot_point(bbox)
 
 
 def _foot_x(person: dict[str, float]) -> float:
@@ -43,31 +48,89 @@ def _bbox_iou(a: dict[str, float], b: dict[str, float]) -> float:
     return float(inter / union) if union > 0 else 0.0
 
 
+def point_in_poly(point: tuple[float, float], poly: np.ndarray | None) -> bool:
+    if poly is None:
+        return False
+    poly_np = np.asarray(poly, dtype=np.float32)
+    if poly_np.ndim != 2 or poly_np.shape[1] != 2 or len(poly_np) < 3:
+        return False
+    return cv2.pointPolygonTest(poly_np, point, False) >= 0
 
-def select_near_far_people(
+
+def _expand_polygon(poly: np.ndarray, margin_px: float) -> np.ndarray:
+    if margin_px <= 0:
+        return poly.astype(np.float32)
+    center = np.mean(poly, axis=0)
+    vecs = poly - center
+    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+    unit = np.divide(vecs, np.maximum(norms, 1e-6))
+    return (poly + unit * float(margin_px)).astype(np.float32)
+
+
+def build_halfcourt_polys(keypoints: np.ndarray | list[list[float]] | None, margin_px: float) -> tuple[np.ndarray | None, np.ndarray | None]:
+    if keypoints is None:
+        return None, None
+    pts = np.asarray(keypoints, dtype=np.float32)
+    if pts.shape != (4, 2):
+        return None, None
+
+    near_left, near_right, far_left, far_right = pts
+    mid_left = 0.5 * (near_left + far_left)
+    mid_right = 0.5 * (near_right + far_right)
+
+    far_poly = np.asarray([far_left, far_right, mid_right, mid_left], dtype=np.float32)
+    near_poly = np.asarray([mid_left, mid_right, near_right, near_left], dtype=np.float32)
+    return _expand_polygon(far_poly, margin_px), _expand_polygon(near_poly, margin_px)
+
+
+def stabilize_selection(
+    prev_id: int | None,
+    current_candidates_dict: dict[int, dict[str, float]],
+    poly: np.ndarray | None,
+) -> int | None:
+    if prev_id is None or prev_id not in current_candidates_dict:
+        return None
+    if poly is None:
+        return prev_id
+    return prev_id if point_in_poly(foot_point(current_candidates_dict[prev_id]), poly) else None
+
+
+def select_player(
+    candidates: dict[int, dict[str, float]],
+    target: str,
+    baseline_center: tuple[float, float],
+) -> int | None:
+    if not candidates:
+        return None
+    heights = np.asarray([max(1.0, float(c["y2"]) - float(c["y1"])) for c in candidates.values()], dtype=np.float32)
+    expected_height = float(np.median(heights)) if len(heights) else 1.0
+    if expected_height <= 0:
+        expected_height = float(np.max(heights)) if len(heights) else 1.0
+
+    def _score(item: tuple[int, dict[str, float]]) -> float:
+        _track_id, person = item
+        px, py = foot_point(person)
+        h = max(1.0, float(person["y2"]) - float(person["y1"]))
+        dist = _distance((px, py), baseline_center)
+        return dist + 0.001 * abs(expected_height - h)
+
+    return min(candidates.items(), key=_score)[0]
+
+
+def _legacy_select_near_far(
     candidates: list[dict[str, float]],
     W: int,
     H: int,
-    prev_near: dict[str, float] | None = None,
-    prev_far: dict[str, float] | None = None,
-    cfg: dict[str, float | int] | None = None,
+    prev_near: dict[str, float] | None,
+    prev_far: dict[str, float] | None,
+    cfg: dict[str, float | int],
 ) -> tuple[dict[str, float] | None, dict[str, float] | None, dict[str, float | bool]]:
-    """Select near/far players with strict x-gating and temporal stability."""
-    if not candidates:
-        return None, None, {"gate_fallback": False, "gate_left_px": 0.0, "gate_right_px": float(W)}
-
-    cfg = cfg or {}
     top_k = int(cfg.get("top_k", 10))
     xgate_left_frac = float(cfg.get("player_xgate_left", 0.18))
     xgate_right_frac = float(cfg.get("player_xgate_right", 0.82))
     temporal_max_dist_frac = float(cfg.get("temporal_max_dist_frac", 0.25))
-    min_conf = float(cfg.get("player_min_conf", 0.3))
 
-    conf_filtered = [c for c in candidates if float(c.get("conf", 0.0)) >= min_conf]
-    if not conf_filtered:
-        return None, None, {"gate_fallback": True, "gate_left_px": 0.0, "gate_right_px": float(W)}
-
-    sorted_by_conf = sorted(conf_filtered, key=lambda item: float(item["conf"]), reverse=True)[: max(2, top_k)]
+    sorted_by_conf = sorted(candidates, key=lambda item: float(item["conf"]), reverse=True)[: max(2, top_k)]
 
     cal_far_left_x = cfg.get("calibration_far_left_x")
     cal_far_right_x = cfg.get("calibration_far_right_x")
@@ -131,6 +194,85 @@ def select_near_far_people(
     return near, far, debug
 
 
+
+def select_near_far_people(
+    candidates: list[dict[str, float]],
+    W: int,
+    H: int,
+    prev_near: dict[str, float] | None = None,
+    prev_far: dict[str, float] | None = None,
+    cfg: dict[str, float | int] | None = None,
+) -> tuple[dict[str, float] | None, dict[str, float] | None, dict[str, float | bool]]:
+    """Select near/far players with geometric half-court filtering and temporal stability."""
+    if not candidates:
+        return None, None, {"gate_fallback": False, "gate_left_px": 0.0, "gate_right_px": float(W)}
+
+    cfg = cfg or {}
+    min_conf = float(cfg.get("player_min_conf", 0.3))
+
+    conf_filtered = [c for c in candidates if float(c.get("conf", 0.0)) >= min_conf]
+    if not conf_filtered:
+        return None, None, {"gate_fallback": True, "gate_left_px": 0.0, "gate_right_px": float(W)}
+
+    keypoints = cfg.get("calibration_pixel_points")
+    margin_px = float(cfg.get("player_halfcourt_margin_px", 16.0))
+    far_poly, near_poly = build_halfcourt_polys(keypoints, margin_px)
+
+    candidates_by_id = {int(person.get("track_id", idx)): person for idx, person in enumerate(conf_filtered)}
+
+    if far_poly is None or near_poly is None:
+        near, far, debug = _legacy_select_near_far(conf_filtered, W, H, prev_near, prev_far, cfg)
+        debug["selection_fallback"] = True
+        return near, far, debug
+
+    far_candidates = {tid: p for tid, p in candidates_by_id.items() if point_in_poly(foot_point(p), far_poly)}
+    near_candidates = {tid: p for tid, p in candidates_by_id.items() if point_in_poly(foot_point(p), near_poly)}
+
+    prev_far_id = int(prev_far["track_id"]) if prev_far and "track_id" in prev_far else None
+    prev_near_id = int(prev_near["track_id"]) if prev_near and "track_id" in prev_near else None
+
+    far_id = stabilize_selection(prev_far_id, far_candidates, far_poly)
+    near_id = stabilize_selection(prev_near_id, near_candidates, near_poly)
+    if far_id is None:
+        baseline_far_center = (0.5 * (float(keypoints[2][0]) + float(keypoints[3][0])), 0.5 * (float(keypoints[2][1]) + float(keypoints[3][1])))
+        far_id = select_player(far_candidates, target="far", baseline_center=baseline_far_center)
+    if near_id is None:
+        baseline_near_center = (0.5 * (float(keypoints[0][0]) + float(keypoints[1][0])), 0.5 * (float(keypoints[0][1]) + float(keypoints[1][1])))
+        near_id = select_player(near_candidates, target="near", baseline_center=baseline_near_center)
+
+    if near_id is not None and near_id == far_id:
+        near_id = None
+
+    near = candidates_by_id.get(near_id) if near_id is not None else None
+    far = candidates_by_id.get(far_id) if far_id is not None else None
+
+    if far is None and prev_far is not None and point_in_poly(foot_point(prev_far), far_poly):
+        far = prev_far
+    if near is None and prev_near is not None and point_in_poly(foot_point(prev_near), near_poly):
+        near = prev_near
+
+    if far is None or near is None:
+        near_fallback, far_fallback, legacy_debug = _legacy_select_near_far(conf_filtered, W, H, prev_near, prev_far, cfg)
+        near = near if near is not None else near_fallback
+        far = far if far is not None else far_fallback
+        debug = {**legacy_debug, "selection_fallback": True}
+    else:
+        debug = {"gate_fallback": False, "gate_left_px": 0.0, "gate_right_px": float(W), "selection_fallback": False}
+
+    debug.update(
+        {
+            "far_candidates": len(far_candidates),
+            "near_candidates": len(near_candidates),
+            "filtered_out": len(candidates_by_id) - len(set(far_candidates) | set(near_candidates)),
+            "far_poly": far_poly,
+            "near_poly": near_poly,
+            "far_track_id": far.get("track_id") if far is not None else -1,
+            "near_track_id": near.get("track_id") if near is not None else -1,
+        }
+    )
+    return near, far, debug
+
+
 def ensure_pose_model(weights_path: Path) -> Path:
     """Ensure pose weights exist locally and never auto-download them."""
     target = Path(weights_path).expanduser().resolve()
@@ -186,9 +328,18 @@ def detect_players(
         "wrist_r_x",
         "wrist_r_y",
         "conf",
+        "track_id",
         "gate_fallback",
         "gate_left_px",
         "gate_right_px",
+        "selection_fallback",
+        "far_candidates",
+        "near_candidates",
+        "filtered_out",
+        "foot_x",
+        "foot_y",
+        "far_poly",
+        "near_poly",
     ]
     if not frames_raw:
         return pd.DataFrame(columns=columns)
@@ -199,6 +350,8 @@ def detect_players(
     rows: list[dict[str, Any]] = []
     prev_near: dict[str, float] | None = None
     prev_far: dict[str, float] | None = None
+    prev_tracks: dict[int, dict[str, float]] = {}
+    next_track_id = 1
 
     for frame_idx, frame in enumerate(frames_raw, start=1):
         results = model(frame, verbose=False)
@@ -246,6 +399,27 @@ def detect_players(
         if not people:
             continue
 
+        if people:
+            assigned_ids: set[int] = set()
+            for person in people:
+                best_track = None
+                best_iou = 0.0
+                for track_id, prev_person in prev_tracks.items():
+                    if track_id in assigned_ids:
+                        continue
+                    iou = _bbox_iou(person, prev_person)
+                    if iou > best_iou:
+                        best_iou = iou
+                        best_track = track_id
+                if best_track is not None and best_iou >= 0.3:
+                    person["track_id"] = best_track
+                    assigned_ids.add(best_track)
+                else:
+                    person["track_id"] = next_track_id
+                    assigned_ids.add(next_track_id)
+                    next_track_id += 1
+            prev_tracks = {int(p["track_id"]): p for p in people}
+
         H, W = frame.shape[:2]
         near_person, far_person, debug_info = select_near_far_people(
             candidates=people,
@@ -260,6 +434,7 @@ def detect_players(
         for label, person in selected:
             if person is None:
                 continue
+            fpx, fpy = foot_point(person)
             rows.append(
                 {
                     "frame": frame_idx,
@@ -268,7 +443,23 @@ def detect_players(
                     "gate_fallback": bool(debug_info.get("gate_fallback", False)),
                     "gate_left_px": float(debug_info.get("gate_left_px", np.nan)),
                     "gate_right_px": float(debug_info.get("gate_right_px", np.nan)),
+                    "selection_fallback": bool(debug_info.get("selection_fallback", False)),
+                    "far_candidates": int(debug_info.get("far_candidates", 0)),
+                    "near_candidates": int(debug_info.get("near_candidates", 0)),
+                    "filtered_out": int(debug_info.get("filtered_out", 0)),
+                    "foot_x": float(fpx),
+                    "foot_y": float(fpy),
+                    "far_poly": np.array2string(np.asarray(debug_info.get("far_poly", np.empty((0, 2)))), precision=1),
+                    "near_poly": np.array2string(np.asarray(debug_info.get("near_poly", np.empty((0, 2)))), precision=1),
                 }
+            )
+        if selection_cfg and bool(selection_cfg.get("player_debug_log", False)):
+            print(
+                f"[players][frame={frame_idx}] far_id={int(debug_info.get('far_track_id', -1))} "
+                f"near_id={int(debug_info.get('near_track_id', -1))} "
+                f"far_candidates={int(debug_info.get('far_candidates', 0))} "
+                f"near_candidates={int(debug_info.get('near_candidates', 0))} "
+                f"filtered={int(debug_info.get('filtered_out', 0))}"
             )
         prev_near = near_person if near_person is not None else prev_near
         prev_far = far_person if far_person is not None else prev_far

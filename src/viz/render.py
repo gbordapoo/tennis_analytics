@@ -45,13 +45,36 @@ def _build_players_by_frame(df_players: pd.DataFrame | None) -> dict[int, dict[s
         if hasattr(row, "gate_right_px"):
             val = getattr(row, "gate_right_px")
             record["gate_right_px"] = float(val) if pd.notna(val) else np.nan
+        if hasattr(row, "foot_x"):
+            val = getattr(row, "foot_x")
+            record["foot_x"] = float(val) if pd.notna(val) else np.nan
+        if hasattr(row, "foot_y"):
+            val = getattr(row, "foot_y")
+            record["foot_y"] = float(val) if pd.notna(val) else np.nan
+        if hasattr(row, "far_poly"):
+            record["far_poly"] = getattr(row, "far_poly")
+        if hasattr(row, "near_poly"):
+            record["near_poly"] = getattr(row, "near_poly")
 
         players_by_frame.setdefault(int(frame), {})[str(player)] = record
 
     return players_by_frame
 
 
-def _draw_players(frame: np.ndarray, frame_players: dict[str, dict[str, float]]) -> None:
+
+
+def _parse_poly(poly_text: str | float | None) -> np.ndarray | None:
+    if poly_text is None or (isinstance(poly_text, float) and not np.isfinite(poly_text)):
+        return None
+    text = str(poly_text).strip()
+    if not text or text == '[]':
+        return None
+    nums = np.fromstring(text.replace('[', ' ').replace(']', ' '), sep=' ')
+    if nums.size < 8 or nums.size % 2 != 0:
+        return None
+    return nums.reshape(-1, 2).astype(np.int32)
+
+def _draw_players(frame: np.ndarray, frame_players: dict[str, dict[str, float]], draw_player_geometry: bool = False) -> None:
     colors = {
         "near": (255, 0, 255),
         "far": (0, 255, 255),
@@ -85,6 +108,9 @@ def _draw_players(frame: np.ndarray, frame_players: dict[str, dict[str, float]])
             if np.isfinite(wx) and np.isfinite(wy):
                 cv2.circle(frame, (int(round(wx)), int(round(wy))), 4, color, -1)
 
+        if draw_player_geometry and np.isfinite(pdata.get("foot_x", np.nan)) and np.isfinite(pdata.get("foot_y", np.nan)):
+            cv2.circle(frame, (int(round(pdata["foot_x"])), int(round(pdata["foot_y"]))), 5, color, -1)
+
 
 def render_video(
     frames_raw: list,
@@ -101,6 +127,7 @@ def render_video(
     bounce_topk: int = 3,
     df_players: pd.DataFrame | None = None,
     draw_players: bool = True,
+    draw_player_geometry: bool = False,
     calibration_points: np.ndarray | None = None,
     bounce_best: dict[str, float | int] | None = None,
 ) -> None:
@@ -172,10 +199,12 @@ def render_video(
 
         frame_players = players_by_frame.get(frame_id, {}) if draw_players else {}
         if draw_players and frame_players:
-            _draw_players(frame, frame_players)
+            _draw_players(frame, frame_players, draw_player_geometry=draw_player_geometry)
 
         if draw_players and frame_players:
             gate_left, gate_right = None, None
+            far_poly = None
+            near_poly = None
             gate_fallback = False
             for pdata in frame_players.values():
                 if np.isfinite(pdata.get("gate_left_px", np.nan)):
@@ -183,12 +212,19 @@ def render_video(
                 if np.isfinite(pdata.get("gate_right_px", np.nan)):
                     gate_right = int(round(float(pdata["gate_right_px"])))
                 gate_fallback = gate_fallback or bool(pdata.get("gate_fallback", False))
+                far_poly = far_poly if far_poly is not None else _parse_poly(pdata.get("far_poly"))
+                near_poly = near_poly if near_poly is not None else _parse_poly(pdata.get("near_poly"))
             if gate_left is not None and gate_right is not None:
                 cv2.line(frame, (gate_left, 0), (gate_left, frame_height - 1), (0, 200, 255), 1)
                 cv2.line(frame, (gate_right, 0), (gate_right, frame_height - 1), (0, 200, 255), 1)
                 cv2.putText(frame, "x-gate", (gate_left + 4, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
             if gate_fallback:
                 cv2.putText(frame, "WARN: gate fallback", (15, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+            if draw_player_geometry:
+                if far_poly is not None:
+                    cv2.polylines(frame, [far_poly], True, (0, 255, 255), 2)
+                if near_poly is not None:
+                    cv2.polylines(frame, [near_poly], True, (255, 0, 255), 2)
 
         if calibration_poly is not None:
             cv2.polylines(frame, [calibration_poly], True, (0, 255, 255), 2)
