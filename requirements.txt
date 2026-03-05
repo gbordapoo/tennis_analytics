@@ -1,6 +1,5 @@
 ultralytics
-opencv-python
-pandas
-numpy
-matplotlib
 torch
+opencv-python
+numpy
+pandas

@@ -104,3 +104,18 @@ Minimum checks before opening a PR:
 - Prefer small, verifiable diffs.
 - Keep docs factual and code-grounded.
 - If missing info, write: `Unknown (not found in repo)` and list where you searched.
+
+## 2026 modular refactor note
+
+`src/main.py` now supports a modular pipeline centered on:
+- `src/detection/` (player + ball detectors)
+- `src/tracking/` (simple tracker)
+- `src/court/` (`keypoint_detector.py`, `court_geometry.py`)
+- `src/analytics/` (events + metrics)
+
+Current primary CLI:
+- `python src/main.py --video videos/federer_murray_trim.mp4 --ball-model models/yolo5_last.pt --court-model models/keypoints_model.pth --output outputs/run1.mp4`
+
+Compatibility aliases are kept:
+- `--model` (alias of `--ball-model`)
+- `--outdir` (writes `<outdir>/output_ultralytics.mp4`)
