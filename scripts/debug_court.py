@@ -67,15 +67,11 @@ def main() -> None:
         for (rx, ry), (fx, fy) in zip(raw_points, refined_points)
         if rx is not None and ry is not None and fx is not None and fy is not None and (abs(rx - fx) > 1e-3 or abs(ry - fy) > 1e-3)
     )
-    homography_replaced = sum(
-        1
-        for (fx, fy), (tx, ty) in zip(refined_points, final_points)
-        if fx is not None and fy is not None and tx is not None and ty is not None and (abs(fx - tx) > 1e-3 or abs(fy - ty) > 1e-3)
-    )
 
     print(f"raw points found: {raw_valid}/{len(raw_points)}")
     print(f"refined points changed: {refined_changed}")
-    print(f"points replaced by homography: {homography_replaced}")
+    print(f"homography used: {detector.last_homography_used}")
+    print(f"points replaced by homography: {detector.last_homography_replacements}")
 
     annotated = frame.copy()
     _draw_points(annotated, raw_points, (0, 0, 255))

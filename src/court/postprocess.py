@@ -94,7 +94,7 @@ def line_intersection(line1: Line, line2: Line) -> Point | None:
     return float(px), float(py)
 
 
-def refine_kps(img: np.ndarray, x_ct: float, y_ct: float, crop_size: int = 40) -> tuple[float, float]:
+def refine_kps(img: np.ndarray, x_ct: float, y_ct: float, crop_size: int = 40) -> tuple[float | None, float | None]:
     h, w = img.shape[:2]
     half = crop_size // 2
 
@@ -105,11 +105,11 @@ def refine_kps(img: np.ndarray, x_ct: float, y_ct: float, crop_size: int = 40) -
 
     crop = img[y0:y1, x0:x1]
     if crop.size == 0:
-        return x_ct, y_ct
+        return None, None
 
     lines = merge_lines(detect_lines(crop))
     if len(lines) < 2:
-        return x_ct, y_ct
+        return None, None
 
     best: Point | None = None
     center = (crop.shape[1] / 2.0, crop.shape[0] / 2.0)
@@ -127,6 +127,39 @@ def refine_kps(img: np.ndarray, x_ct: float, y_ct: float, crop_size: int = 40) -
             best_dist = dist
 
     if best is None:
-        return x_ct, y_ct
+        return None, None
 
     return float(x0 + best[0]), float(y0 + best[1])
+
+
+def apply_homography_gated(
+    points: list[tuple[float | None, float | None]],
+    confidences: list[float],
+    reproj_points: list[tuple[float | None, float | None]],
+    frame_shape: tuple[int, int],
+    max_shift_px: float = 35,
+    low_conf_threshold: float = 0.35,
+) -> tuple[list[tuple[float | None, float | None]], int]:
+    h, w = frame_shape
+    corrected: list[tuple[float | None, float | None]] = []
+    replacements = 0
+
+    for (px, py), conf, (rx, ry) in zip(points, confidences, reproj_points):
+        if rx is None or ry is None or not (0 <= rx < w and 0 <= ry < h):
+            corrected.append((px, py))
+            continue
+
+        if px is None or py is None:
+            corrected.append((rx, ry))
+            replacements += 1
+            continue
+
+        dist = float(np.hypot(px - rx, py - ry))
+        use_h = conf < low_conf_threshold or dist <= max_shift_px
+        if use_h:
+            corrected.append((rx, ry))
+            replacements += 1
+        else:
+            corrected.append((px, py))
+
+    return corrected, replacements
