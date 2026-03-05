@@ -47,6 +47,7 @@ def _build_player_selection_cfg(args: argparse.Namespace, project_root: Path, sc
         "player_xgate_left": args.player_xgate_left,
         "player_xgate_right": args.player_xgate_right,
         "player_min_conf": args.player_min_conf,
+        "player_halfcourt_margin_px": args.player_halfcourt_margin_px,
     }
 
     if args.calibration is None:
@@ -62,6 +63,7 @@ def _build_player_selection_cfg(args: argparse.Namespace, project_root: Path, sc
         pixel_points, _ = load_manual_calibration(calibration_path)
         cfg["calibration_far_left_x"] = float(pixel_points[2][0])
         cfg["calibration_far_right_x"] = float(pixel_points[3][0])
+        cfg["calibration_pixel_points"] = pixel_points
     except Exception as exc:
         print(f"⚠️ Could not load calibration for player gate: {exc}")
 
@@ -173,6 +175,17 @@ def parse_args() -> argparse.Namespace:
         help="Extra horizontal margin in pixels when using calibration far-left/far-right points for player gate",
     )
     parser.add_argument("--player-min-conf", type=float, default=0.3, help="Minimum person confidence used for near/far assignment")
+    parser.add_argument(
+        "--player-halfcourt-margin-px",
+        type=float,
+        default=16.0,
+        help="Margin in pixels used to expand near/far half-court polygons for player filtering",
+    )
+    parser.add_argument(
+        "--player-geometry-visuals",
+        action="store_true",
+        help="Draw near/far half-court polygons and selected player foot points",
+    )
     parser.add_argument("--pose-download", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--detect-hits", action="store_true", help="Enable hit detection")
     parser.add_argument("--hit-out", type=str, default="hits.csv", help="Path to hits CSV output")
@@ -195,6 +208,7 @@ def main() -> None:
     player_selection_cfg = _build_player_selection_cfg(args, project_root, script_dir)
     player_selection_cfg["calibration_x_margin_px"] = args.player_calibration_margin_px
     player_selection_cfg["player_min_conf"] = args.player_min_conf
+    player_selection_cfg["player_debug_log"] = bool(args.detect_players)
     model_path = _resolve_path(args.model, project_root, script_dir)
     video_path = _resolve_path(args.video, project_root, script_dir)
     outdir = _resolve_path(args.outdir, project_root, script_dir)
@@ -353,6 +367,7 @@ def main() -> None:
     if args.draw_players and df_players is not None and not df_players.empty:
         render_kwargs["df_players"] = df_players
     render_kwargs["draw_players"] = bool(args.draw_players)
+    render_kwargs["draw_player_geometry"] = bool(args.player_geometry_visuals)
     if args.calibration_visuals and overlay_points is not None:
         render_kwargs["calibration_points"] = overlay_points
 
